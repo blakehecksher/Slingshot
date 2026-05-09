@@ -54,6 +54,66 @@
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
       #pad-debug b { color: #eae0c8; }
+      #status {
+        position: fixed;
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        min-width: 380px;
+        font-size: 13px;
+        line-height: 1.55;
+        color: #eae0c8;
+        background: rgba(8, 10, 16, 0.62);
+        border: 1px solid rgba(208, 100, 36, 0.4);
+        padding: 8px 14px;
+        pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+      }
+      #status .line { white-space: nowrap; }
+      #status b {
+        color: #d06424;
+        letter-spacing: 0.06em;
+        display: inline-block;
+        min-width: 64px;
+      }
+      #status .bar {
+        display: inline-block;
+        color: rgba(208, 100, 36, 0.32);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        margin: 0 6px;
+      }
+      #status .bar-filled { color: #6dd6c8; }
+      #status .mining { color: #6dd6c8; margin-left: 8px; }
+      #status .reserve {
+        color: #ff5a4a;
+        font-weight: bold;
+        margin-left: 8px;
+        animation: blink 0.7s steps(2, start) infinite;
+      }
+      @keyframes blink { to { visibility: hidden; } }
+      #toast {
+        position: fixed;
+        top: 38%;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 18px;
+        letter-spacing: 0.08em;
+        color: #eae0c8;
+        background: rgba(8, 10, 16, 0.72);
+        border: 1px solid rgba(208, 100, 36, 0.55);
+        padding: 10px 22px;
+        pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        opacity: 0;
+        transition: opacity 0.18s ease-out;
+      }
+      #fade-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: #000;
+        opacity: 0;
+        pointer-events: none;
+      }
     </style>
   </head>
   <body>
@@ -61,6 +121,9 @@
     <div id="hud"></div>
     <div id="controls"></div>
     <div id="pad-debug"></div>
+    <div id="status"></div>
+    <div id="toast"></div>
+    <div id="fade-overlay"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

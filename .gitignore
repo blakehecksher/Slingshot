@@ -8,6 +8,10 @@ dist/
 .idea/
 .vscode/
 
+docs/concept-images
+
+Blake/
+
 # Playwright MCP debug artifacts
 .playwright-mcp/
-*.png
+playwright-images/

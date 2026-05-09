@@ -1,49 +1,52 @@
 # State
-_Last updated: 2026-05-09 0110_
+_Last updated: 2026-05-09 1730_
 
 ## Current focus
 
-Phase 1 is implemented through the M5 feature set and is now in M6 feel tuning. The latest pass makes controller right stick look-only and maps ship flight back onto the left stick.
+Phase 2 complete. Full run loop shipped and feel-tested. Phase 3 (upgrades + persistence) is next.
 
 ## What's working
 
-- M0/M1 stack still builds: Vite + strict TypeScript, Three.js, Rapier compat, fixed timestep.
-- Rapier timestep is explicitly set to 1/120s to match the game loop.
-- Ship thrust and gravity both apply as per-tick impulses, matching the existing M1 force decision.
-- Static and drifting procedural asteroids render as irregular displaced icosahedrons with warm/desaturated materials.
-- Custom gravity samples all asteroids with softening and is shared by live physics and trajectory prediction.
-- World-space trajectory ribbon predicts roughly 8s ahead and color-grades green/yellow/red by asteroid clearance.
-- Top-right minimap shows nearby asteroids, ship orientation, and predicted path.
-- Camera-only shake and gamepad rumble intensity scale with gravity pull.
-- Chase camera position and orientation both inherit ship rotation, so roll stays attached to the hull instead of being rebuilt against world-up.
-- Controller controls now avoid lateral strafe and bumper flight controls: left stick rolls/pitches the ship, right stick only looks around, triggers thrust/brake.
-- LT/S braking applies velocity damping, and a light overspeed assist begins above ~95 m/s.
-- `npm run build` passes. The known large bundle warning remains.
-- Local dev server is running at `http://127.0.0.1:5173/Slingshot/`.
-
-## In progress
-
-M6 feel-test/tuning. Needs real flying with keyboard/mouse and preferably Xbox controller to judge whether the ship-relative camera, left-stick roll/pitch, right-stick look, braking, gravity strength, prediction usefulness, shake intensity, and populated-field performance feel right.
+- Phase 1 stack still green: Vite + strict TS, Three.js, Rapier compat, fixed timestep at 1/120s.
+- `tsc --noEmit` + `vite build` both pass clean.
+- Full Phase 2 run loop:
+  - Asteroids have solid kinematic-position colliders. Drift tracks the collider.
+  - Ship-asteroid contact above 14 m/s = death + 600 ms fade + teleport to base + 1.2 s invuln. Below threshold = velocity-damped graze.
+  - Mining-by-proximity ticks cargo (kg) up to a 5000 kg cap, with `MAX_RATE_PER_AST` and `MAX_TOTAL_RATE` ceilings.
+  - Energy drains **only** when boost held (B button / Shift). Normal thrust and strafe are free. Below 5% threshold thrust throttled to 25% (reserve crawl). 22 floating energy pickups seeded across the field.
+  - Boost (B/Shift): 2.5× forward thrust, 4× energy drain rate while held.
+  - Procedural base at world origin with 80 m sensor trigger. On entry: deposit cargo into bank + refill energy + toast.
+  - On death, cargo splits into 250 kg chunks scattered backward from impact direction. Chunks persist as collectable cargo pickups.
+  - Sparrow-style ship (cream/orange/teal) with named attachment-point Object3Ds: `nose`, `wing-l`, `wing-r`, `engine-l`, `engine-r`, `topspine`, `cargo-bay`.
+- HUD: bottom-center status (CARGO bar, BANK, ENERGY bar with reserve flash). Toast for events. Fade overlay driven by lifecycle.
+- Audio: gravity rumble (tracks pull) + hull creak (tracks proximity). Unlocks on first gesture.
+- In-game lil-gui tuning panel (P): live readouts, sliders for all TUNING objects, clipboard copy, reset to defaults, field regenerate.
+- Gamepad: L-stick = pitch/roll, LB/RB = yaw right/left, RT/LT = forward/reverse, D-pad = strafe, B = boost, Y = camera toggle.
 
 ## Known issues
 
-- Build chunk > 500kB warning (expected: Three + Rapier + inlined WASM). Defer.
-- Favicon 404 in console (cosmetic).
-- Browser screenshot automation was not completed in this session; Chrome headless returned without writing a screenshot. Build and HTTP smoke checks passed.
-- M6 verdict is not written yet because it requires an actual feel-test.
+- Build chunk > 500 kB warning (Three + Rapier WASM). Defer.
+- Favicon 404 (cosmetic).
+- Cargo chunks can spawn inside an asteroid sphere on glancing high-speed deaths. Mitigated, not eliminated. Accepted Phase 2 behavior.
 
 ## Next actions
-1. Play the local build and tune control constants: forward/reverse thrust, brake damping, overspeed thresholds, and pitch/yaw/roll rates.
-2. Test with an Xbox controller for axis feel, braking, rumble intensity, and nausea.
-3. Write `docs/log/<timestamp> Phase 1 feel-test.md` with the honest M6 verdict.
+
+Phase 3: upgrades + persistence.
+- Persistent bank across sessions (localStorage).
+- Upgrade shop at base: cargo cap, thrust, energy max, etc.
+- Attachment-point visual upgrades mount on existing Object3D hooks in ship.
 
 ## Active plan
-docs/plans/2026-05-08 2251 Plan - Phase 1 Gravity.md
+
+None. Phase 2 plan marked complete.
 
 ## Recent logs
-- docs/log/2026-05-09 0110 Look-only right stick.md - mapped controller right stick to camera look only and left stick to roll/pitch flight
-- docs/log/2026-05-09 0106 Ship-relative camera controls.md - made chase camera inherit ship orientation and removed lateral strafe from default controls
-- docs/log/2026-05-09 0058 Controls tuning.md - switched to 6DOF controls, added real brake damping and light overspeed assist
-- docs/log/2026-05-09 0054 M2-M5 gravity field.md - implemented gravity asteroids, trajectory/minimap, feedback, populated field; M6 needs feel-test
-- docs/log/2026-05-08 2318 M1 free flight.md - modules split, ship rigid body + thrust + rotation + cockpit camera + input wired and verified
-- docs/log/2026-05-08 2251 Kickoff.md - project kickoff, Phase 1 plan written, M0 scaffold + local verification
+- docs/log/2026-05-09 1730 Phase 2 feel-test.md — Phase 2 verdict: loop is fun, Phase 3 earned
+- docs/log/2026-05-09 1059 Phase 2 M1-M5 implementation.md — M1-M5 implemented; ship art + attachment points
+- docs/log/2026-05-09 1047 Phase 2 kickoff.md — Phase 2 plan written, implementation begun
+- docs/log/2026-05-09 0110 Look-only right stick.md — controller right stick is camera-only
+- docs/log/2026-05-09 0106 Ship-relative camera controls.md — chase camera inherits ship orientation
+- docs/log/2026-05-09 0058 Controls tuning.md — 6DOF controls + brake damping + overspeed assist
+- docs/log/2026-05-09 0054 M2-M5 gravity field.md — Phase 1 M2-M5 features
+- docs/log/2026-05-08 2318 M1 free flight.md — Phase 1 M1 ship rigid body + camera + input
+- docs/log/2026-05-08 2251 Kickoff.md — project kickoff + Phase 1 plan

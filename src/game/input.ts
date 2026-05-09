@@ -11,6 +11,8 @@ export interface ShipCommand {
   // Free-look orbit input for the camera. Rotates the chase-cam offset
   // around the ship; does NOT change ship orientation. [-1, 1].
   look: { yaw: number; pitch: number };
+  // Boost intensity [0, 1]. Multiplies forward thrust and energy drain.
+  boost: number;
   // Edge events (true on the frame they fire, then auto-clear).
   toggleCameraMode: boolean;
 }
@@ -102,26 +104,27 @@ export class Input {
   }
 
   // Build a ShipCommand for this tick.
-  // Current gamepad feel target: left stick flies the ship (roll + pitch),
-  // right stick looks around without steering, triggers handle thrust/brake.
-  // Xbox standard mapping. Jet-pilot layout: L stick is the cockpit
-  // flight stick (roll + pitch). R stick is dedicated camera. No strafe —
-  // the ship goes where it points, like a jet.
-  //
-  //   L stick X (axis 0) → roll  (banking — primary turn input)
-  //   L stick Y (axis 1) → pitch inverted: stick back (+) = nose up
-  //   R stick X (axis 2) → camera yaw   (X inverted: push right = look right)
-  //   R stick Y (axis 3) → camera pitch (inverted: stick back = look up)
-  //   LT (button 6)      → reverse thrust
-  //   RT (button 7)      → forward thrust
-  //   LB (button 4)      → yaw left  (rudder)
-  //   RB (button 5)      → yaw right (rudder)
-  //   Y  (button 3)      → toggle camera mode (cockpit/chase)
+  // Xbox standard mapping:
+  //   L stick X (axis 0)         → roll
+  //   L stick Y (axis 1)         → pitch (inverted: back = nose up)
+  //   R stick X (axis 2)         → camera yaw
+  //   R stick Y (axis 3)         → camera pitch
+  //   LT (button 6, analog)      → reverse / brake
+  //   RT (button 7, analog)      → forward thrust
+  //   LB (button 4)              → yaw right
+  //   RB (button 5)              → yaw left
+  //   B  (button 1)              → boost (drains energy faster, more thrust)
+  //   Y  (button 3)              → toggle camera mode
+  //   D-pad up (12)              → strafe up
+  //   D-pad down (13)            → strafe down
+  //   D-pad left (14)            → strafe left
+  //   D-pad right (15)           → strafe right
   sample(): ShipCommand {
     const cmd: ShipCommand = {
       thrust: { x: 0, y: 0, z: 0 },
       rotate: { pitch: 0, yaw: 0, roll: 0 },
       look: { yaw: 0, pitch: 0 },
+      boost: 0,
       toggleCameraMode: false,
     };
 
@@ -143,6 +146,19 @@ export class Input {
       const rt = pad.buttons[7]?.value ?? 0;
       cmd.thrust.z += -rt; // forward = -Z
       cmd.thrust.z += lt;  // reverse = +Z
+
+      // LB / RB: yaw rudder.
+      if (pad.buttons[4]?.pressed) cmd.rotate.yaw += 1;  // LB = yaw right
+      if (pad.buttons[5]?.pressed) cmd.rotate.yaw -= 1;  // RB = yaw left
+
+      // D-pad: strafe (lateral + vertical thrust).
+      if (pad.buttons[12]?.pressed) cmd.thrust.y += 1;  // up
+      if (pad.buttons[13]?.pressed) cmd.thrust.y -= 1;  // down
+      if (pad.buttons[14]?.pressed) cmd.thrust.x -= 1;  // left
+      if (pad.buttons[15]?.pressed) cmd.thrust.x += 1;  // right
+
+      // B button: boost.
+      cmd.boost = Math.max(cmd.boost, pad.buttons[1]?.value ?? (pad.buttons[1]?.pressed ? 1 : 0));
 
       // Y button: camera mode toggle (edge-triggered).
       const yPressed = pad.buttons[3]?.pressed ?? false;
@@ -174,6 +190,9 @@ export class Input {
     if (this.keys.has('ArrowDown')) cmd.rotate.pitch -= 1;
     if (this.keys.has('ArrowLeft')) cmd.rotate.yaw -= 1;
     if (this.keys.has('ArrowRight')) cmd.rotate.yaw += 1;
+
+    // Shift = boost (keyboard).
+    if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) cmd.boost = 1;
 
     // Mouse aim (pointer-locked) → ship rotation.
     if (this.pointerLocked) {
