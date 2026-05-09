@@ -12,6 +12,7 @@ export interface ShipCommand {
   // around the ship; does NOT change ship orientation. [-1, 1].
   look: { yaw: number; pitch: number };
   // Boost intensity [0, 1]. Multiplies forward thrust and energy drain.
+  // Gamepad can trigger this with B, or by pulling RT into its top range.
   boost: number;
   // Edge events (true on the frame they fire, then auto-clear).
   toggleCameraMode: boolean;
@@ -157,8 +158,15 @@ export class Input {
       if (pad.buttons[14]?.pressed) cmd.thrust.x -= 1;  // left
       if (pad.buttons[15]?.pressed) cmd.thrust.x += 1;  // right
 
-      // B button: boost.
-      cmd.boost = Math.max(cmd.boost, pad.buttons[1]?.value ?? (pad.buttons[1]?.pressed ? 1 : 0));
+      // Boost: B button, or pull RT deep into the throw while thrusting.
+      // This keeps light/medium thrust free, while max trigger behaves like
+      // the ship's booster stage kicking in.
+      const triggerBoost = Math.max(0, (rt - 0.82) / 0.18);
+      cmd.boost = Math.max(
+        cmd.boost,
+        triggerBoost,
+        pad.buttons[1]?.value ?? (pad.buttons[1]?.pressed ? 1 : 0),
+      );
 
       // Y button: camera mode toggle (edge-triggered).
       const yPressed = pad.buttons[3]?.pressed ?? false;

@@ -33,13 +33,22 @@ export function createBase(
   group.position.copy(position);
   scene.add(group);
 
-  const hullMat = new THREE.MeshStandardMaterial({ color: PALETTE.hull, roughness: 0.6, metalness: 0.3 });
-  const accentMat = new THREE.MeshStandardMaterial({ color: PALETTE.accent, roughness: 0.5, metalness: 0.4 });
+  const hullMat = new THREE.MeshStandardMaterial({ color: PALETTE.hull, roughness: 0.52, metalness: 0.34 });
+  const accentMat = new THREE.MeshStandardMaterial({
+    color: PALETTE.accent,
+    roughness: 0.42,
+    metalness: 0.45,
+    emissive: 0x3a1206,
+    emissiveIntensity: 0.12,
+  });
   const panelMat = new THREE.MeshStandardMaterial({ color: PALETTE.panel, roughness: 0.7, metalness: 0.2 });
   const glassMat = new THREE.MeshStandardMaterial({
-    color: PALETTE.glass, roughness: 0.15, metalness: 0.7, emissive: 0x07252a, emissiveIntensity: 0.5,
+    color: PALETTE.glass, roughness: 0.1, metalness: 0.55, emissive: 0x0b7184, emissiveIntensity: 1.1,
   });
-  const beaconMat = new THREE.MeshBasicMaterial({ color: PALETTE.beacon });
+  const beaconMat = new THREE.MeshBasicMaterial({
+    color: PALETTE.beacon,
+    toneMapped: false,
+  });
 
   // Central core: cluster of staggered boxes.
   const core = new THREE.Mesh(new THREE.BoxGeometry(BASE_TUNING.CORE_SIZE, BASE_TUNING.CORE_SIZE * 0.7, BASE_TUNING.CORE_SIZE), hullMat);
@@ -56,6 +65,14 @@ export function createBase(
   const beaconBall = new THREE.Mesh(new THREE.SphereGeometry(2.0, 12, 8), beaconMat);
   beaconBall.position.y = BASE_TUNING.CORE_SIZE * 1.5;
   group.add(beaconBall);
+
+  const beaconLight = new THREE.PointLight(PALETTE.beacon, 35, BASE_TUNING.TRIGGER_RADIUS * 2.2, 1.7);
+  beaconLight.position.copy(beaconBall.position);
+  group.add(beaconLight);
+
+  const dockLight = new THREE.PointLight(0x6dd6c8, 12, BASE_TUNING.TRIGGER_RADIUS * 1.4, 2.0);
+  dockLight.position.set(0, BASE_TUNING.CORE_SIZE * 0.2, 0);
+  group.add(dockLight);
 
   // Docking ring (visual only, hint for "land here").
   const ring = new THREE.Mesh(

@@ -21,10 +21,10 @@ export interface Pickup {
 
 export const PICKUP_TUNING = {
   // Visual / collider sizes — baked at spawn. Tweaks need a regenerate.
-  ENERGY_RADIUS: 4,
-  CARGO_RADIUS: 6,
-  ENERGY_TRIGGER_RADIUS: 8,
-  CARGO_TRIGGER_RADIUS: 11,
+  ENERGY_RADIUS: 10,
+  CARGO_RADIUS: 8,
+  ENERGY_TRIGGER_RADIUS: 20,
+  CARGO_TRIGGER_RADIUS: 20,
   // Per-second linear damping for floating cargo.
   CARGO_DRIFT_DAMPING: 0.05,
   // Seed area for energy pickups — random uniform inside this box centered
@@ -38,8 +38,9 @@ export const PICKUP_TUNING = {
 
 const ENERGY_GEOM = new THREE.IcosahedronGeometry(PICKUP_TUNING.ENERGY_RADIUS, 0);
 const ENERGY_MAT = new THREE.MeshStandardMaterial({
-  color: 0x6dd6c8, roughness: 0.3, metalness: 0.6,
-  emissive: 0x1a8c80, emissiveIntensity: 1.0,
+  color: 0x7ff7e8, roughness: 0.2, metalness: 0.45,
+  emissive: 0x24d6c7, emissiveIntensity: 2.2,
+  toneMapped: false,
 });
 const CARGO_GEOM = new THREE.BoxGeometry(
   PICKUP_TUNING.CARGO_RADIUS * 1.4,
@@ -48,7 +49,7 @@ const CARGO_GEOM = new THREE.BoxGeometry(
 );
 const CARGO_MAT = new THREE.MeshStandardMaterial({
   color: 0xd06424, roughness: 0.5, metalness: 0.4,
-  emissive: 0x4a1d08, emissiveIntensity: 0.6,
+  emissive: 0x6a2408, emissiveIntensity: 0.9,
 });
 
 export class PickupSystem {

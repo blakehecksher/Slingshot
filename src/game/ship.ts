@@ -4,14 +4,14 @@ import type { PhysicsWorld } from '../physics/world';
 import { COL_ASTEROID, COL_BASE, COL_PICKUP, COL_SHIP, interactionGroups } from './collision';
 import type { ShipCommand } from './input';
 
-// Build a readable Sparrow-style ship from primitives. Functional silhouette:
-// cream hull, orange accents, teal cockpit, swept wings, twin rear engines.
-// Attachment-point Object3Ds at known offsets so Phase 3 upgrades can mount
-// visible bits without rewriting the ship.
+// Ships are readable procedural primitives, not final art. Each variant keeps
+// the same attachment names and collider bounds so gameplay/upgrades can treat
+// the visual body as a swappable skin.
 
 interface BuiltShip {
   root: THREE.Object3D;
   attachments: Record<AttachmentName, THREE.Object3D>;
+  boostJets: THREE.Object3D[];
 }
 
 export type AttachmentName =
@@ -32,101 +32,101 @@ const PALETTE = {
   exhaust: 0xff7a3a, // exhaust glow
 } as const;
 
-function buildPlaceholderShip(): BuiltShip {
-  const root = new THREE.Group();
+type ShipPalette = Record<keyof typeof PALETTE, number>;
 
-  const hullMat = new THREE.MeshStandardMaterial({ color: PALETTE.hull, roughness: 0.55, metalness: 0.25 });
-  const accentMat = new THREE.MeshStandardMaterial({ color: PALETTE.accent, roughness: 0.45, metalness: 0.35 });
-  const trimMat = new THREE.MeshStandardMaterial({ color: PALETTE.trim, roughness: 0.7, metalness: 0.15 });
-  const cockpitMat = new THREE.MeshStandardMaterial({
-    color: PALETTE.cockpit, roughness: 0.15, metalness: 0.7, emissive: 0x07252a, emissiveIntensity: 0.4,
-  });
-  const engineMat = new THREE.MeshStandardMaterial({ color: PALETTE.engine, roughness: 0.85, metalness: 0.2 });
-  const exhaustMat = new THREE.MeshBasicMaterial({ color: PALETTE.exhaust });
+export type ShipVariantId = 'sparrow' | 'scrapper' | 'tamarack' | 'courier';
 
-  // Main fuselage. Tapered along Z by stacking three boxes — front narrow,
-  // middle wide, rear narrow-ish.
-  const midHull = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.62, 1.6), hullMat);
-  midHull.position.set(0, 0, 0);
-  root.add(midHull);
+export const SHIP_VARIANTS: Record<ShipVariantId, string> = {
+  sparrow: 'Sparrow prototype',
+  scrapper: 'Scrapper Mk-I',
+  tamarack: 'Tamarack-07',
+  courier: 'Veteran gravity-runner',
+};
 
-  const frontHull = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.5, 0.9), hullMat);
-  frontHull.position.set(0, 0.02, -1.1);
-  root.add(frontHull);
+export const SHIP_VISUALS = {
+  variant: 'scrapper' as ShipVariantId,
+};
 
-  const rearHull = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.55, 0.7), hullMat);
-  rearHull.position.set(0, -0.02, 1.1);
-  root.add(rearHull);
+function createShipMaterials(palette: ShipPalette = PALETTE) {
+  return {
+    hull: new THREE.MeshStandardMaterial({ color: palette.hull, roughness: 0.55, metalness: 0.34 }),
+    accent: new THREE.MeshStandardMaterial({
+      color: palette.accent,
+      roughness: 0.42,
+      metalness: 0.42,
+      emissive: 0x361006,
+      emissiveIntensity: 0.1,
+    }),
+    trim: new THREE.MeshStandardMaterial({ color: palette.trim, roughness: 0.68, metalness: 0.24 }),
+    cockpit: new THREE.MeshStandardMaterial({
+      color: palette.cockpit,
+      roughness: 0.08,
+      metalness: 0.55,
+      emissive: 0x0b7184,
+      emissiveIntensity: 0.9,
+    }),
+    engine: new THREE.MeshStandardMaterial({ color: palette.engine, roughness: 0.85, metalness: 0.22 }),
+    cargo: new THREE.MeshStandardMaterial({ color: 0x4f5542, roughness: 0.8, metalness: 0.2 }),
+    darkPanel: new THREE.MeshStandardMaterial({ color: 0x20242a, roughness: 0.7, metalness: 0.28 }),
+    boost: new THREE.MeshBasicMaterial({
+      color: 0xffb36a,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  };
+}
 
-  // Orange accent stripe on top of the mid hull (visible from above + sides).
-  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.04, 1.55), accentMat);
-  stripe.position.set(0, 0.34, 0);
-  root.add(stripe);
+type MaterialSet = ReturnType<typeof createShipMaterials>;
 
-  // Nose: narrow swept cone.
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.32, 1.0, 8), trimMat);
-  nose.rotation.x = -Math.PI / 2;
-  nose.position.set(0, 0.0, -2.05);
-  root.add(nose);
+function box(root: THREE.Object3D, size: [number, number, number], pos: [number, number, number], mat: THREE.Material, rot?: [number, number, number]): void {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), mat);
+  mesh.position.set(pos[0], pos[1], pos[2]);
+  if (rot) mesh.rotation.set(rot[0], rot[1], rot[2]);
+  root.add(mesh);
+}
 
-  // Cockpit canopy: stretched dome made from a scaled half-sphere.
-  const canopyGeom = new THREE.SphereGeometry(0.42, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2);
-  const canopy = new THREE.Mesh(canopyGeom, cockpitMat);
-  canopy.scale.set(0.95, 0.7, 1.55);
-  canopy.position.set(0, 0.32, -0.5);
-  root.add(canopy);
+function cyl(root: THREE.Object3D, radius: number, length: number, pos: [number, number, number], mat: THREE.Material, radialSegments = 14): void {
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, radialSegments), mat);
+  mesh.rotation.x = Math.PI / 2;
+  mesh.position.set(pos[0], pos[1], pos[2]);
+  root.add(mesh);
+}
 
-  // Wings: swept-back trapezoidal-ish via tapered boxes. Use ExtrudeGeometry
-  // would be heavier; cheap approximation = two rotated thin boxes.
-  function makeWing(side: 1 | -1): THREE.Object3D {
-    const wing = new THREE.Group();
-    const inner = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.10, 0.85), accentMat);
-    inner.position.set(side * 0.95, 0.0, 0.25);
-    wing.add(inner);
-    const outer = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.08, 0.55), trimMat);
-    outer.position.set(side * 1.7, 0.0, 0.55);
-    wing.add(outer);
-    // Tip light
-    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6),
-      new THREE.MeshBasicMaterial({ color: side > 0 ? 0x3affa0 : 0xff5a4a }));
-    tip.position.set(side * 2.0, 0.0, 0.65);
-    wing.add(tip);
-    return wing;
-  }
-  root.add(makeWing(-1));
-  root.add(makeWing(1));
+function cone(root: THREE.Object3D, radius: number, length: number, pos: [number, number, number], mat: THREE.Material, radialSegments = 8): void {
+  const mesh = new THREE.Mesh(new THREE.ConeGeometry(radius, length, radialSegments), mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(pos[0], pos[1], pos[2]);
+  root.add(mesh);
+}
 
-  // Twin rear engines, low on the hull.
-  function makeEngine(side: 1 | -1): THREE.Object3D {
-    const eng = new THREE.Group();
-    const pod = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.95, 12), engineMat);
-    pod.rotation.x = Math.PI / 2;
-    pod.position.set(side * 0.55, -0.12, 1.3);
-    eng.add(pod);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.27, 0.04, 8, 18), accentMat);
-    ring.rotation.y = Math.PI / 2;
-    ring.position.set(side * 0.55, -0.12, 1.78);
-    eng.add(ring);
-    const exhaust = new THREE.Mesh(new THREE.CircleGeometry(0.20, 14), new THREE.MeshBasicMaterial({ color: PALETTE.exhaust }));
-    exhaust.position.set(side * 0.55, -0.12, 1.79);
-    exhaust.rotation.y = Math.PI;
-    eng.add(exhaust);
-    return eng;
-  }
-  root.add(makeEngine(-1));
-  root.add(makeEngine(1));
-  void exhaustMat; // material defined for parity with prior version
+function canopy(root: THREE.Object3D, pos: [number, number, number], scale: [number, number, number], mat: THREE.Material): void {
+  const geom = new THREE.SphereGeometry(0.42, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.scale.set(scale[0], scale[1], scale[2]);
+  mesh.position.set(pos[0], pos[1], pos[2]);
+  root.add(mesh);
+}
 
-  // Vertical tail fin (orange tipped, readable for roll).
-  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.5, 0.55), trimMat);
-  fin.position.set(0, 0.5, 0.95);
-  root.add(fin);
-  const finTip = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.12, 0.4), accentMat);
-  finTip.position.set(0, 0.78, 0.95);
-  root.add(finTip);
+function addEngine(root: THREE.Object3D, jets: THREE.Object3D[], mats: MaterialSet, x: number, y: number, z: number, radius = 0.22, length = 0.85): void {
+  cyl(root, radius, length, [x, y, z], mats.engine, 16);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(radius * 1.08, radius * 0.16, 8, 18), mats.accent);
+  ring.rotation.y = Math.PI / 2;
+  ring.position.set(x, y, z + length * 0.5);
+  root.add(ring);
 
-  // Attachment-point Object3Ds — empty Object3D children at known offsets.
-  // Phase 3 upgrades will parent visible bits to these without ship rewrite.
+  const exhaust = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.78, radius * 2.2, 14), mats.boost);
+  exhaust.rotation.x = Math.PI / 2;
+  exhaust.position.set(x, y, z + length * 0.5 + radius * 0.58);
+  exhaust.scale.setScalar(0.2);
+  exhaust.visible = false;
+  root.add(exhaust);
+  jets.push(exhaust);
+}
+
+function attachPoints(root: THREE.Object3D): Record<AttachmentName, THREE.Object3D> {
   function attach(name: AttachmentName, x: number, y: number, z: number): THREE.Object3D {
     const o = new THREE.Object3D();
     o.name = name;
@@ -134,17 +134,148 @@ function buildPlaceholderShip(): BuiltShip {
     root.add(o);
     return o;
   }
-  const attachments: Record<AttachmentName, THREE.Object3D> = {
-    'nose':      attach('nose',      0,    0.05, -2.4),
-    'wing-l':    attach('wing-l',   -1.7,  0.0,   0.55),
-    'wing-r':    attach('wing-r',    1.7,  0.0,   0.55),
-    'engine-l':  attach('engine-l', -0.55, -0.12, 1.85),
-    'engine-r':  attach('engine-r',  0.55, -0.12, 1.85),
-    'topspine':  attach('topspine',  0,    0.5,   0.0),
-    'cargo-bay': attach('cargo-bay', 0,   -0.35,  0.4),
+  return {
+    'nose': attach('nose', 0, 0.05, -2.4),
+    'wing-l': attach('wing-l', -1.7, 0.0, 0.55),
+    'wing-r': attach('wing-r', 1.7, 0.0, 0.55),
+    'engine-l': attach('engine-l', -0.55, -0.12, 1.85),
+    'engine-r': attach('engine-r', 0.55, -0.12, 1.85),
+    'topspine': attach('topspine', 0, 0.5, 0.0),
+    'cargo-bay': attach('cargo-bay', 0, -0.35, 0.4),
   };
+}
 
-  return { root, attachments };
+function finishShip(root: THREE.Object3D, boostJets: THREE.Object3D[]): BuiltShip {
+  const cockpitGlow = new THREE.PointLight(0x5defff, 1.2, 8, 2.2);
+  cockpitGlow.position.set(0, 0.45, -0.45);
+  root.add(cockpitGlow);
+
+  const engineGlow = new THREE.PointLight(0xff7a3a, 1.6, 9, 2.0);
+  engineGlow.position.set(0, -0.08, 1.55);
+  root.add(engineGlow);
+
+  return { root, attachments: attachPoints(root), boostJets };
+}
+
+function buildSparrowShip(): BuiltShip {
+  const root = new THREE.Group();
+  const mats = createShipMaterials();
+  const boostJets: THREE.Object3D[] = [];
+
+  box(root, [1.3, 0.62, 1.6], [0, 0, 0], mats.hull);
+  box(root, [0.95, 0.5, 0.9], [0, 0.02, -1.1], mats.hull);
+  box(root, [1.05, 0.55, 0.7], [0, -0.02, 1.1], mats.hull);
+  box(root, [0.32, 0.04, 1.55], [0, 0.34, 0], mats.accent);
+  cone(root, 0.32, 1.0, [0, 0.0, -2.05], mats.trim);
+  canopy(root, [0, 0.32, -0.5], [0.95, 0.7, 1.55], mats.cockpit);
+
+  for (const side of [-1, 1] as const) {
+    box(root, [1.0, 0.10, 0.85], [side * 0.95, 0.0, 0.25], mats.accent);
+    box(root, [0.7, 0.08, 0.55], [side * 1.7, 0.0, 0.55], mats.trim);
+    const tip = new THREE.Mesh(
+      new THREE.SphereGeometry(0.06, 8, 6),
+      new THREE.MeshBasicMaterial({ color: side > 0 ? 0x3affa0 : 0xff5a4a }),
+    );
+    tip.position.set(side * 2.0, 0.0, 0.65);
+    root.add(tip);
+    addEngine(root, boostJets, mats, side * 0.55, -0.12, 1.3, 0.24, 0.95);
+  }
+
+  box(root, [0.08, 0.5, 0.55], [0, 0.5, 0.95], mats.trim);
+  box(root, [0.09, 0.12, 0.4], [0, 0.78, 0.95], mats.accent);
+
+  return finishShip(root, boostJets);
+}
+
+function buildScrapperShip(): BuiltShip {
+  const root = new THREE.Group();
+  const mats = createShipMaterials({ ...PALETTE, hull: 0xd8c8a5, accent: 0xa84f35, cockpit: 0x9d6c2c, trim: 0x27313a });
+  const boostJets: THREE.Object3D[] = [];
+
+  cone(root, 0.43, 1.55, [0, -0.02, -1.85], mats.accent, 7);
+  box(root, [1.05, 0.58, 1.45], [0, 0.0, -0.65], mats.hull);
+  box(root, [1.22, 0.72, 1.1], [0, 0.02, 0.5], mats.hull);
+  box(root, [1.35, 0.82, 0.85], [0, 0.02, 1.25], mats.darkPanel);
+  box(root, [0.35, 0.05, 2.2], [0, 0.39, -0.45], mats.accent);
+  canopy(root, [0, 0.4, -0.45], [0.78, 0.55, 1.35], mats.cockpit);
+  box(root, [0.82, 0.38, 0.72], [0, -0.55, 0.45], mats.darkPanel);
+  box(root, [0.95, 0.16, 0.45], [0, -0.82, 0.45], mats.cargo);
+
+  for (let i = 0; i < 8; i++) {
+    cone(root, 0.06, 0.28, [-0.35 + i * 0.1, 0.62, 0.33 + i * 0.07], mats.trim, 4);
+  }
+
+  for (const side of [-1, 1] as const) {
+    box(root, [0.75, 0.08, 0.52], [side * 1.02, -0.02, 0.78], mats.hull, [0, side * 0.18, 0]);
+    box(root, [0.16, 0.62, 0.58], [side * 1.42, 0.23, 1.08], mats.accent);
+    addEngine(root, boostJets, mats, side * 1.35, -0.02, 0.78, 0.22, 1.05);
+    cyl(root, 0.08, 0.72, [side * 0.72, -0.08, -0.82], mats.engine, 8);
+  }
+  addEngine(root, boostJets, mats, 0, -0.04, 1.42, 0.36, 0.95);
+
+  return finishShip(root, boostJets);
+}
+
+function buildTamarackShip(): BuiltShip {
+  const root = new THREE.Group();
+  const mats = createShipMaterials({ ...PALETTE, hull: 0x6d7055, accent: 0xc56a22, cockpit: 0x4c5a5d, trim: 0x1e211d });
+  const boostJets: THREE.Object3D[] = [];
+
+  box(root, [1.25, 0.72, 0.72], [0, 0.0, -1.25], mats.hull);
+  cone(root, 0.55, 0.95, [0, -0.03, -1.98], mats.trim, 6);
+  box(root, [1.5, 0.9, 1.6], [0, 0.02, -0.15], mats.hull);
+  box(root, [1.35, 0.95, 1.25], [0, 0.0, 1.05], mats.hull);
+  box(root, [0.82, 0.34, 1.75], [0, 0.58, 0.15], mats.darkPanel);
+  canopy(root, [0, 0.58, -0.88], [1.12, 0.78, 1.1], mats.cockpit);
+  box(root, [0.72, 0.52, 1.25], [-0.58, -0.66, 0.35], mats.darkPanel);
+  box(root, [0.62, 0.45, 1.05], [0.58, -0.62, 0.18], mats.cargo);
+  box(root, [0.12, 0.78, 0.72], [0, 0.82, 1.0], mats.accent);
+
+  for (const side of [-1, 1] as const) {
+    box(root, [1.0, 0.12, 0.75], [side * 1.12, -0.05, 0.82], mats.hull, [0, side * -0.1, 0]);
+    box(root, [0.68, 0.1, 0.35], [side * 1.85, -0.08, 1.04], mats.accent);
+    box(root, [0.18, 0.55, 0.8], [side * 1.76, -0.46, 0.42], mats.engine);
+    addEngine(root, boostJets, mats, side * 0.42, -0.02, 1.45, 0.32, 0.9);
+    addEngine(root, boostJets, mats, side * 1.58, -0.22, 0.75, 0.18, 0.62);
+    cyl(root, 0.16, 0.85, [side * 1.45, -0.18, -0.12], mats.cargo, 10);
+  }
+
+  return finishShip(root, boostJets);
+}
+
+function buildCourierShip(): BuiltShip {
+  const root = new THREE.Group();
+  const mats = createShipMaterials({ ...PALETTE, hull: 0x152431, accent: 0xc45f22, cockpit: 0x23343b, trim: 0xcfc0a0 });
+  const boostJets: THREE.Object3D[] = [];
+
+  cone(root, 0.4, 1.65, [0, -0.02, -1.93], mats.trim, 7);
+  box(root, [0.88, 0.5, 1.35], [0, 0.0, -0.8], mats.hull);
+  box(root, [1.12, 0.62, 1.55], [0, 0.0, 0.25], mats.hull);
+  box(root, [1.08, 0.66, 0.95], [0, -0.01, 1.2], mats.hull);
+  box(root, [0.18, 0.05, 2.55], [0, 0.34, -0.45], mats.accent);
+  canopy(root, [0, 0.35, -0.18], [0.82, 0.62, 1.25], mats.cockpit);
+  box(root, [0.95, 0.36, 0.88], [0, 0.64, 0.6], mats.cargo);
+  box(root, [1.08, 0.08, 1.0], [0, 0.86, 0.6], mats.trim);
+
+  for (const side of [-1, 1] as const) {
+    box(root, [0.85, 0.08, 0.54], [side * 1.08, -0.03, 0.56], mats.hull, [0, side * 0.12, 0]);
+    box(root, [0.15, 0.72, 0.58], [side * 1.34, 0.42, 1.1], mats.hull, [0, 0, side * 0.12]);
+    addEngine(root, boostJets, mats, side * 0.5, -0.12, 1.35, 0.24, 0.9);
+    addEngine(root, boostJets, mats, side * 0.96, -0.18, 1.24, 0.16, 0.72);
+    cyl(root, 0.18, 0.95, [side * 0.92, -0.16, 0.55], mats.engine, 12);
+  }
+  addEngine(root, boostJets, mats, 0, -0.05, 1.48, 0.28, 0.88);
+
+  return finishShip(root, boostJets);
+}
+
+function buildShipVariant(variant: ShipVariantId): BuiltShip {
+  switch (variant) {
+    case 'sparrow': return buildSparrowShip();
+    case 'scrapper': return buildScrapperShip();
+    case 'tamarack': return buildTamarackShip();
+    case 'courier': return buildCourierShip();
+  }
 }
 
 // Tuning knobs. Numbers chosen for feel, not realism. All are read each tick
@@ -171,14 +302,13 @@ export const SHIP_TUNING = {
   SPEED_ASSIST_FULL: 297,
   SPEED_ASSIST_DAMPING: 0.85,
 
-  // Boost: extra forward thrust + faster energy drain when boost button held.
-  // Applied as multiplier on forward thrust (1 = no change, 2 = double).
+  // Boost: extra forward thrust + faster energy drain while the boost input
+  // is held. Applied as multiplier on forward thrust (1 = no change).
   BOOST_THRUST_MULT: 2.5,
-  // Energy drain multiplier while boosting.
   BOOST_ENERGY_MULT: 4.0,
 };
 
-// Hull collider half-extents. Baked at construction — not live tunable.
+// Hull collider half-extents. Baked at construction - not live tunable.
 const HULL_HX = 0.75;
 const HULL_HY = 0.40;
 const HULL_HZ = 1.25;
@@ -189,21 +319,27 @@ const ANGULAR_DAMPING = 0.0;
 
 export class Ship {
   readonly body: RAPIER.RigidBody;
-  readonly mesh: THREE.Object3D;
+  mesh: THREE.Object3D;
   readonly colliderHandle: number;
-  readonly attachments: Record<AttachmentName, THREE.Object3D>;
+  attachments: Record<AttachmentName, THREE.Object3D>;
 
   private _force = new THREE.Vector3();
   private _localAxis = new THREE.Vector3();
   private _quat = new THREE.Quaternion();
   private _velocity = new THREE.Vector3();
   private _physics: PhysicsWorld;
+  private _scene: THREE.Scene;
+  private _boostJets: THREE.Object3D[] = [];
+  private _currentBoost = 0;
+  private _variant: ShipVariantId;
   private _frozen = false;
   private _thrustEnabled = true;
   private _thrustScale = 1;
 
   constructor(physics: PhysicsWorld, scene: THREE.Scene) {
     this._physics = physics;
+    this._scene = scene;
+    this._variant = SHIP_VISUALS.variant;
     const desc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(0, 0, 0)
       .setLinearDamping(LINEAR_DAMPING)
@@ -221,9 +357,10 @@ export class Ship {
     const collider = physics.world.createCollider(colliderDesc, this.body);
     this.colliderHandle = collider.handle;
 
-    const built = buildPlaceholderShip();
+    const built = buildShipVariant(this._variant);
     this.mesh = built.root;
     this.attachments = built.attachments;
+    this._boostJets = built.boostJets;
     scene.add(this.mesh);
   }
 
@@ -234,7 +371,6 @@ export class Ship {
 
     if (this._thrustEnabled) {
       const mass = SHIP_TUNING.MASS;
-      // Boost only multiplies forward direction (cmd.thrust.z < 0).
       const boost = Math.max(0, Math.min(1, cmd.boost ?? 0));
       const boostMult = 1 + boost * (SHIP_TUNING.BOOST_THRUST_MULT - 1);
       const forwardScale = cmd.thrust.z < 0
@@ -256,6 +392,9 @@ export class Ship {
         );
       }
       this.applySpeedAssist(cmd, dt);
+      this.updateBoostVisual(boost * Math.max(0, -cmd.thrust.z));
+    } else {
+      this.updateBoostVisual(0);
     }
 
     this._localAxis.set(
@@ -268,6 +407,56 @@ export class Ship {
       { x: this._localAxis.x, y: this._localAxis.y, z: this._localAxis.z },
       true,
     );
+  }
+
+  setVariant(variant: ShipVariantId): void {
+    if (variant === this._variant) return;
+    this._variant = variant;
+    SHIP_VISUALS.variant = variant;
+
+    const oldMesh = this.mesh;
+    const wasVisible = oldMesh.visible;
+    const built = buildShipVariant(variant);
+    this.mesh = built.root;
+    this.mesh.visible = wasVisible;
+    this.attachments = built.attachments;
+    this._boostJets = built.boostJets;
+
+    this._scene.remove(oldMesh);
+    this._scene.add(this.mesh);
+    this.syncMeshFromBody();
+  }
+
+  cycleVariant(direction = 1): ShipVariantId {
+    const ids = Object.keys(SHIP_VARIANTS) as ShipVariantId[];
+    const i = ids.indexOf(this._variant);
+    const next = ids[(i + direction + ids.length) % ids.length];
+    this.setVariant(next);
+    return next;
+  }
+
+  get variant(): ShipVariantId {
+    return this._variant;
+  }
+
+  get variantName(): string {
+    return SHIP_VARIANTS[this._variant];
+  }
+
+  private updateBoostVisual(amount: number): void {
+    const target = Math.max(0, Math.min(1, amount));
+    this._currentBoost += (target - this._currentBoost) * 0.35;
+    for (const jet of this._boostJets) {
+      jet.visible = this._currentBoost > 0.02;
+      jet.scale.set(
+        0.55 + this._currentBoost * 0.7,
+        0.55 + this._currentBoost * 0.7,
+        0.75 + this._currentBoost * 1.6,
+      );
+      const mesh = jet as THREE.Mesh;
+      const mat = mesh.material;
+      if (mat instanceof THREE.MeshBasicMaterial) mat.opacity = this._currentBoost * 0.95;
+    }
   }
 
   private applySpeedAssist(cmd: ShipCommand, dt: number): void {
@@ -324,6 +513,7 @@ export class Ship {
     if (frozen) {
       this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      this.updateBoostVisual(0);
     }
   }
 

@@ -42,7 +42,7 @@ window.addEventListener('gamepadconnected', unlockAudio);
 const FIXED_DT = 1 / 120;
 const MAX_STEPS_PER_FRAME = 8;
 
-const { renderer, scene, camera } = createRenderRig(canvas);
+const { renderer, composer, scene, camera } = createRenderRig(canvas);
 const physics = new PhysicsWorld(FIXED_DT);
 const input = new Input(canvas);
 const registry = new ContactRegistry();
@@ -190,6 +190,7 @@ controls.innerHTML = `
   <div class="row">LB / RB - yaw right / left</div>
   <div class="row">D-pad - strafe (up/down/left/right)</div>
   <div class="row">B - boost (drains energy)</div>
+  <div class="row">Full RT - trigger boost stage</div>
   <div class="row">Y - toggle chase / cockpit cam</div>
   <div class="row" style="height:6px"></div>
   <div class="row"><b>Keyboard + mouse</b></div>
@@ -201,6 +202,7 @@ controls.innerHTML = `
   <div class="row">Mouse (click to capture) - yaw / pitch</div>
   <div class="row">Arrows - pitch + yaw (alt)</div>
   <div class="row">C - toggle chase / cockpit cam</div>
+  <div class="row">V - cycle ship visual</div>
   <div class="row">G - toggle gamepad debug</div>
   <div class="row">P - toggle tuning panel</div>
   <div class="row">H - hide / show this panel</div>
@@ -216,6 +218,10 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyG' && !e.repeat) {
     padDebugVisible = !padDebugVisible;
     padDebug.style.display = padDebugVisible ? 'block' : 'none';
+  }
+  if (e.code === 'KeyV' && !e.repeat) {
+    ship.cycleVariant(1);
+    showToast(`SHIP ${ship.variantName}`, 1200);
   }
 });
 
@@ -299,9 +305,10 @@ function tickPhysics(): void {
   if (lifecycle.isAlive()) {
     ship.applyAcceleration(gravitySample.acceleration, FIXED_DT);
 
-    // Energy drains only while boost is held (B button / Shift).
+    // Energy drains only when the boost stage is adding forward thrust.
     const boost = Math.max(0, Math.min(1, cmd.boost));
-    const drainMag = boost * SHIP_TUNING.BOOST_ENERGY_MULT;
+    const forwardThrust = Math.max(0, -cmd.thrust.z);
+    const drainMag = boost * forwardThrust * SHIP_TUNING.BOOST_ENERGY_MULT;
     const thrustScale = energy.tick(drainMag, FIXED_DT);
     ship.setThrustScale(thrustScale);
     ship.applyCommand(cmd, FIXED_DT);
@@ -390,7 +397,7 @@ function render(): void {
   trajectoryRibbon.update(trajectory);
   syncCamera();
   feedback.apply(camera);
-  renderer.render(scene, camera);
+  composer.render();
 
   const r = ship.body.rotation();
   shipQuat.set(r.x, r.y, r.z, r.w);
@@ -454,7 +461,7 @@ function loop(nowMs: number): void {
 
     hud.textContent =
       `Slingshot - Phase 2 run loop\n` +
-      `fps ${fps.toFixed(0)}  dt ${(FIXED_DT * 1000).toFixed(2)}ms  cam ${cameraMode}\n` +
+      `fps ${fps.toFixed(0)}  dt ${(FIXED_DT * 1000).toFixed(2)}ms  cam ${cameraMode}  ship ${ship.variantName}\n` +
       `speed ${speed} m/s  pull ${pull} m/s²  clearance ${clearance}m  shake ${feedbackLevel}%\n` +
       `${asteroidField.asteroids.length} asteroids  ${padHint}${lockHint}`;
   }

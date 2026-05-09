@@ -65,3 +65,9 @@ Reason: First M1 pass used `setAdditionalMass(1.0)` with no collider. Without a 
 
 Decision: Ship rotation is set via `setAngvel` from input each tick, with input directly mapping to a target angular velocity in ship-local axes.
 Reason: Direct angular velocity gives snappy, predictable controls that match an arcade-flight feel. Torque + integrator-driven rotation tends to feel sluggish and adds a tuning axis we don't need yet. Revisit if M2 (gravity in the picture) reveals that direct-angvel rotation makes slingshot orientation handling feel wrong.
+
+## 2026-05-09 1907 - Ship visual asset fallback order
+
+Decision: Ship visuals should resolve in this order per variant: kit-built manifest, full GLB/GLTF model, procedural primitive fallback.
+Reason: Kit-built ships support future ship construction and visible upgrades; full models support AI-generated or commissioned assets; primitive fallbacks keep the game playable while assets are missing or in progress.
+Supersedes: none

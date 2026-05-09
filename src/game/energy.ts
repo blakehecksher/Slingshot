@@ -1,15 +1,15 @@
-// Energy as shaping constraint. Boost (B/Shift) drains; pickups + base refill;
-// below reserve threshold thrust is throttled to a "limp home" rate.
+// Energy as shaping constraint. Boosted forward thrust drains; pickups + base
+// refill; below reserve threshold thrust is throttled to a "limp home" rate.
 
 export const ENERGY_TUNING = {
   ENERGY_MAX: 100,
-  // Base drain rate per second passed to tick(). Multiplied by BOOST_ENERGY_MULT
-  // in main.ts so holding boost burns faster.
-  THRUST_COST_PER_SEC: 6.5,
+  // Base drain rate per second passed to tick(). main.ts scales this by
+  // boost intensity and forward thrust amount.
+  THRUST_COST_PER_SEC: 2,
   // Below this fraction of max, thrust is throttled to RESERVE_THRUST_SCALE.
   RESERVE_THRESHOLD_FRAC: 0.05,
   RESERVE_THRUST_SCALE: 0.25,
-  PICKUP_AMOUNT: 35,
+  PICKUP_AMOUNT: 100,
 };
 
 export class Energy {

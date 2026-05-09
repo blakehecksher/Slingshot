@@ -19,16 +19,16 @@ export interface Asteroid {
 // their positions are deliberate landmarks. Regenerate the field via
 // AsteroidField.regenerate() to apply changes to existing runs.
 export const ASTEROID_TUNING = {
-  PROCEDURAL_COUNT: 95,
-  RADIUS_MIN: 8,
-  RADIUS_RANGE: 95,
+  PROCEDURAL_COUNT: 150,
+  RADIUS_MIN: 10,
+  RADIUS_RANGE: 150,
   RADIUS_POWER: 2.4,
   BAND_INNER: 260,
   BAND_RANGE: 2350,
   BAND_JITTER: 220,
-  Z_NEAR: -350,
-  Z_DEPTH: 3200,
-  Y_RANGE: 520,
+  Z_NEAR: 0,
+  Z_DEPTH: 8000,
+  Y_RANGE: 1500,
   DRIFT_MIN: 0.15,
   DRIFT_RANGE: 0.75,
   ROT_MIN: 0.015,
@@ -38,9 +38,28 @@ export const ASTEROID_TUNING = {
 };
 
 const ASTEROID_MATERIALS = [
-  new THREE.MeshStandardMaterial({ color: 0x5c5248, roughness: 0.95, metalness: 0.04 }),
-  new THREE.MeshStandardMaterial({ color: 0x6a5a4a, roughness: 0.92, metalness: 0.03 }),
-  new THREE.MeshStandardMaterial({ color: 0x4a4b50, roughness: 0.96, metalness: 0.02 }),
+  new THREE.MeshStandardMaterial({ color: 0x5f574f, roughness: 0.9, metalness: 0.08 }),
+  new THREE.MeshStandardMaterial({ color: 0x766452, roughness: 0.86, metalness: 0.07 }),
+  new THREE.MeshStandardMaterial({ color: 0x4b5158, roughness: 0.92, metalness: 0.06 }),
+];
+
+const GLINT_MATERIALS = [
+  new THREE.MeshBasicMaterial({
+    color: 0xff7a3a,
+    transparent: true,
+    opacity: 0.72,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  }),
+  new THREE.MeshBasicMaterial({
+    color: 0x35d6ff,
+    transparent: true,
+    opacity: 0.52,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  }),
 ];
 
 function seededNoise(n: number): number {
@@ -68,6 +87,29 @@ function buildAsteroidGeometry(radius: number, seed: number): THREE.BufferGeomet
   return geom;
 }
 
+function addMineralGlints(mesh: THREE.Mesh, radius: number, seed: number): void {
+  if (radius < 42) return;
+
+  const count = Math.min(9, 2 + Math.floor(radius / 34));
+  const geom = new THREE.SphereGeometry(1, 8, 6);
+  const normal = new THREE.Vector3();
+
+  for (let i = 0; i < count; i++) {
+    normal.set(
+      seededNoise(seed + 23 + i * 4.1) * 2 - 1,
+      seededNoise(seed + 24 + i * 4.1) * 2 - 1,
+      seededNoise(seed + 25 + i * 4.1) * 2 - 1,
+    ).normalize();
+    const mat = GLINT_MATERIALS[(i + Math.floor(seed)) % GLINT_MATERIALS.length];
+    const glint = new THREE.Mesh(geom, mat);
+    glint.position.copy(normal).multiplyScalar(radius * (0.74 + seededNoise(seed + i) * 0.18));
+    const s = Math.max(1.2, radius * (0.012 + seededNoise(seed + i * 2) * 0.018));
+    glint.scale.set(s * 1.7, s * 0.55, s);
+    glint.lookAt(normal.clone().multiplyScalar(radius * 2));
+    mesh.add(glint);
+  }
+}
+
 function massForRadius(radius: number): number {
   return radius * radius * ASTEROID_TUNING.MASS_COEF;
 }
@@ -83,6 +125,7 @@ function makeAsteroid(
 ): Asteroid {
   const mat = ASTEROID_MATERIALS[Math.floor(seed) % ASTEROID_MATERIALS.length];
   const mesh = new THREE.Mesh(buildAsteroidGeometry(radius, seed), mat);
+  addMineralGlints(mesh, radius, seed);
   mesh.position.copy(position);
   mesh.castShadow = false;
   mesh.receiveShadow = false;
