@@ -50,3 +50,18 @@ Reason: Players need to trust the trajectory minimap and predicted path line. Sh
 
 Decision: No automated tests for Phase 1. Game-feel is the test.
 Reason: The questions Phase 1 answers ("does this feel good?") cannot be tested in code. Adding test infrastructure now would be premature and would slow iteration. Add Vitest later when pure-logic modules emerge.
+
+## 2026-05-08 2318 — Apply ship thrust as per-tick impulse
+
+Decision: Ship thrust is applied via `RigidBody.applyImpulse(force × dt)` once per physics tick, not via `addForce`.
+Reason: First M1 pass with `addForce` produced quadratic speed growth — the force buffer was effectively not being cleared between steps in this `@dimforge/rapier3d-compat` build (or our call pattern stacked it). Per-tick impulses are explicit one-shots, never accumulate, and reproduce exactly the same physics as a constant force when called each tick. Less footgun surface across future Rapier upgrades.
+
+## 2026-05-08 2318 — Ship has a real collider for mass
+
+Decision: The ship rigid body has a cuboid collider sized to the hull (1.5×0.8×2.5 m) with density tuned so mass = 1 kg. Collision groups are zeroed so it never participates in contacts in Phase 1.
+Reason: First M1 pass used `setAdditionalMass(1.0)` with no collider. Without a collider Rapier did not derive a real mass + inertia, and forces produced ~5 million× expected acceleration. A collider gives a proper mass tensor; opting out of collisions via groups is one line and reversible per-collider when M2 lands.
+
+## 2026-05-08 2318 — Rotation: direct angular velocity, not torque
+
+Decision: Ship rotation is set via `setAngvel` from input each tick, with input directly mapping to a target angular velocity in ship-local axes.
+Reason: Direct angular velocity gives snappy, predictable controls that match an arcade-flight feel. Torque + integrator-driven rotation tends to feel sluggish and adds a tuning axis we don't need yet. Revisit if M2 (gravity in the picture) reveals that direct-angvel rotation makes slingshot orientation handling feel wrong.

@@ -10,4 +10,4 @@ dist/
 
 # Playwright MCP debug artifacts
 .playwright-mcp/
-m0-bootstrap.png
+*.png
