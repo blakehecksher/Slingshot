@@ -109,6 +109,8 @@ const lifecycle = new Lifecycle(ship, SPAWN_POS, {
   },
   onRespawn: () => {
     energy.refill();
+    peakSpeed = 0;
+    hasPrevVelocity = false;
   },
 });
 
@@ -132,6 +134,12 @@ const shipEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const shipPosVec = new THREE.Vector3();
 const tmpDeathPos = new THREE.Vector3();
 const tmpDeathVel = new THREE.Vector3();
+const tmpThrustWorld = new THREE.Vector3();
+const tmpShipQuat = new THREE.Quaternion();
+const prevVelocity = new THREE.Vector3();
+let hasPrevVelocity = false;
+let accelMag = 0;
+let peakSpeed = 0;
 
 let trajectory: Trajectory = predictTrajectory(ship.position, ship.linearVelocity, asteroidField.asteroids);
 let gravitySample = sampleGravityAt(shipPosVec.copy(SPAWN_POS), asteroidField.asteroids);
@@ -302,6 +310,8 @@ function tickPhysics(): void {
   shipPosVec.set(p.x, p.y, p.z);
   gravitySample = sampleGravityAt(shipPosVec, asteroidField.asteroids);
 
+  ship.setAmbientPull(gravitySample.strongestPull);
+
   if (lifecycle.isAlive()) {
     ship.applyAcceleration(gravitySample.acceleration, FIXED_DT);
 
@@ -320,7 +330,28 @@ function tickPhysics(): void {
   physics.step();
   asteroidField.update(FIXED_DT);
   pickups.update(FIXED_DT);
-  feedback.update(gravitySample.strongestPull, FIXED_DT, input.readGamepad());
+
+  // Acceleration magnitude from real velocity delta. EMA-smoothed so the
+  // readout doesn't jitter at 120 Hz. Peak speed tracks the run high-water
+  // mark; reset on respawn.
+  const v = ship.linearVelocity;
+  const speed = Math.hypot(v.x, v.y, v.z);
+  if (speed > peakSpeed) peakSpeed = speed;
+  if (hasPrevVelocity) {
+    const ax = (v.x - prevVelocity.x) / FIXED_DT;
+    const ay = (v.y - prevVelocity.y) / FIXED_DT;
+    const az = (v.z - prevVelocity.z) / FIXED_DT;
+    const a = Math.hypot(ax, ay, az);
+    accelMag += (a - accelMag) * 0.18;
+  }
+  prevVelocity.set(v.x, v.y, v.z);
+  hasPrevVelocity = true;
+  // Build world-space thrust vector from cmd. ship-local axes: x=right,
+  // y=up, z=forward (-Z forward in Three's convention).
+  const r = ship.body.rotation();
+  tmpShipQuat.set(r.x, r.y, r.z, r.w);
+  tmpThrustWorld.set(cmd.thrust.x, cmd.thrust.y, cmd.thrust.z).applyQuaternion(tmpShipQuat);
+  feedback.update(gravitySample.acceleration, tmpThrustWorld, FIXED_DT, input.readGamepad());
 
   // Drain collision events. Fires for both solid and sensor pairs.
   let deathThisTick = false;
@@ -462,7 +493,8 @@ function loop(nowMs: number): void {
     hud.textContent =
       `Slingshot - Phase 2 run loop\n` +
       `fps ${fps.toFixed(0)}  dt ${(FIXED_DT * 1000).toFixed(2)}ms  cam ${cameraMode}  ship ${ship.variantName}\n` +
-      `speed ${speed} m/s  pull ${pull} m/s²  clearance ${clearance}m  shake ${feedbackLevel}%\n` +
+      `speed ${speed} m/s  peak ${peakSpeed.toFixed(1)} m/s  accel ${accelMag.toFixed(1)} m/s²\n` +
+      `pull ${pull} m/s²  clearance ${clearance}m  shake ${feedbackLevel}%\n` +
       `${asteroidField.asteroids.length} asteroids  ${padHint}${lockHint}`;
   }
 

@@ -8,12 +8,13 @@
 
 export const AUDIO_TUNING = {
   MASTER_VOLUME: 0.85,
-  // Rumble: grows with gravity pull magnitude. Tune REF_PULL for the pull
-  // value at which rumble approaches full volume. Curve raised to <1 power
-  // so quiet wells already make sound — gives the loop more presence.
+  // Rumble: grows with gravity pull magnitude. REF_PULL is the pull value
+  // at which rumble approaches full volume. Pulled higher + curve raised
+  // above 1 so baseline far-field pull stays silent and only big nearby
+  // wells produce audible rumble.
   RUMBLE_VOLUME: 0.9,
-  RUMBLE_REF_PULL: 3.0,
-  RUMBLE_CURVE: 0.7,
+  RUMBLE_REF_PULL: 18.0,
+  RUMBLE_CURVE: 1.4,
   // Creak: clearance-driven. Below CREAK_NEAR clearance, creak ramps in;
   // at CREAK_FAR (or further) silent. Inverted lerp.
   CREAK_VOLUME: 0.85,

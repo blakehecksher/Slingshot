@@ -33,8 +33,15 @@ export const ASTEROID_TUNING = {
   DRIFT_RANGE: 0.75,
   ROT_MIN: 0.015,
   ROT_RANGE: 0.045,
-  // Mass = radius² × MASS_COEF. Bigger coef = stronger gravity wells.
-  MASS_COEF: 900,
+  // Mass = radius^MASS_RADIUS_POWER × MASS_COEF × coreDensity. Cube scaling
+  // (P=3) makes large rocks dominate the field — concentrated Dead Iron
+  // cores per spec §4. Bigger coef = stronger wells across the board.
+  MASS_COEF: 8,
+  MASS_RADIUS_POWER: 3,
+  // Per-rock core density roll. Some look ordinary but pull harder than
+  // their size suggests — rewards pilots who learn to read the field.
+  CORE_DENSITY_MIN: 0.55,
+  CORE_DENSITY_RANGE: 1.2,
 };
 
 const ASTEROID_MATERIALS = [
@@ -110,8 +117,8 @@ function addMineralGlints(mesh: THREE.Mesh, radius: number, seed: number): void 
   }
 }
 
-function massForRadius(radius: number): number {
-  return radius * radius * ASTEROID_TUNING.MASS_COEF;
+function massForRadius(radius: number, coreDensity: number): number {
+  return Math.pow(radius, ASTEROID_TUNING.MASS_RADIUS_POWER) * ASTEROID_TUNING.MASS_COEF * coreDensity;
 }
 
 function makeAsteroid(
@@ -141,12 +148,13 @@ function makeAsteroid(
     .setRestitution(0);
   const collider = physics.world.createCollider(colliderDesc, body);
 
+  const coreDensity = ASTEROID_TUNING.CORE_DENSITY_MIN + seededNoise(seed + 11) * ASTEROID_TUNING.CORE_DENSITY_RANGE;
   const asteroid: Asteroid = {
     mesh,
     position: position.clone(),
     velocity: velocity.clone(),
     radius,
-    mass: massForRadius(radius),
+    mass: massForRadius(radius, coreDensity),
     rotationAxis: new THREE.Vector3(
       seededNoise(seed + 1) * 2 - 1,
       seededNoise(seed + 2) * 2 - 1,

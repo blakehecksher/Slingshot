@@ -1,9 +1,9 @@
 # State
-_Last updated: 2026-05-09 1911_
+_Last updated: 2026-05-09 1921_
 
 ## Current focus
 
-Phase 2 complete. `Blake/config-values/03.json` is baked in as the code defaults. Concept-inspired ship variants, boost-stage visuals, and a first lighting polish pass are in place. Ship asset pipeline direction is documented; Phase 3 (upgrades + persistence) is next.
+Phase 2.5 feel pass: gravity wells sharpened, slingshot restored. Speed assist now fades inside wells so flybys actually fling. Mass scales radius³ × per-rock core density. Dead Iron core ramp adds a near-surface "point of no return". Ready for live tuning via P panel before Phase 3.
 
 ## What's working
 
@@ -47,9 +47,10 @@ Phase 3: upgrades + persistence.
 
 ## Active plan
 
-None. Phase 2 plan marked complete.
+docs/plans/2026-05-09 1921 Plan - Slingshot feel.md
 
 ## Recent logs
+- docs/plans/2026-05-09 1921 Plan - Slingshot feel.md - sharpened wells, cube-scaled mass, core ramp, well-aware speed assist
 - docs/log/2026-05-09 1907 Ship asset pipeline.md - documented kit/full-model/primitive ship visual pipeline and future ship-builder direction
 - docs/log/2026-05-09 1908 Background sun fix.md - moved visible sun from reachable world mesh into the sky dome shader
 - docs/log/2026-05-09 1854 Lighting polish.md - added concept-inspired deep-field lighting, bloom, local emissive accents, and asteroid glints

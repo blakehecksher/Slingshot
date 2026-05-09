@@ -5,6 +5,7 @@ import { ASTEROID_TUNING, AsteroidField } from '../game/asteroids';
 import { BASE_TUNING } from '../game/base';
 import { ECONOMY_TUNING } from '../game/economy';
 import { ENERGY_TUNING } from '../game/energy';
+import { FEEDBACK_TUNING } from '../game/feedback';
 import { GRAVITY_TUNING } from '../game/gravity';
 import { LIFECYCLE_TUNING } from '../game/lifecycle';
 import { PICKUP_TUNING, PickupSystem } from '../game/pickups';
@@ -43,7 +44,8 @@ type TuningGroupKey =
   | 'ASTEROID_TUNING'
   | 'PICKUP_TUNING'
   | 'BASE_TUNING'
-  | 'AUDIO_TUNING';
+  | 'AUDIO_TUNING'
+  | 'FEEDBACK_TUNING';
 
 type TunableRecord = Record<string, number>;
 
@@ -63,6 +65,7 @@ export class TuningPanel {
     PICKUP_TUNING: snapshot(PICKUP_TUNING),
     BASE_TUNING: snapshot(BASE_TUNING),
     AUDIO_TUNING: snapshot(AUDIO_TUNING),
+    FEEDBACK_TUNING: snapshot(FEEDBACK_TUNING),
   };
 
   constructor(deps: TuningPanelDeps) {
@@ -111,6 +114,8 @@ export class TuningPanel {
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_START', 30, 500, 1);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_FULL', 60, 800, 1);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_DAMPING', 0, 2, 0.01);
+    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_PULL_SUPPRESS_LO', 0, 20, 0.1);
+    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_PULL_SUPPRESS_HI', 0.5, 60, 0.1);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'BOOST_THRUST_MULT', 1, 8, 0.05);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'BOOST_ENERGY_MULT', 1, 12, 0.1);
 
@@ -119,6 +124,8 @@ export class TuningPanel {
     this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'SOFTENING_FACTOR', 0, 2, 0.01);
     this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'MIN_SOFTENING', 0, 100, 1);
     this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'DANGER_RANGE', 50, 600, 5);
+    this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'CORE_BOOST_RANGE_FRAC', 0, 4, 0.05);
+    this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'CORE_BOOST_PEAK', 0, 6, 0.05);
 
     const econ = this.gui.addFolder('Mining / Cargo');
     this.addTunable(econ, 'ECONOMY_TUNING', ECONOMY_TUNING, 'CARGO_CAP_KG', 500, 20000, 100);
@@ -160,7 +167,10 @@ export class TuningPanel {
     this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'DRIFT_RANGE', 0, 5, 0.05);
     this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'ROT_MIN', 0, 0.5, 0.005);
     this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'ROT_RANGE', 0, 0.5, 0.005);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'MASS_COEF', 50, 5000, 50);
+    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'MASS_COEF', 0.5, 50, 0.5);
+    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'MASS_RADIUS_POWER', 1, 4, 0.05);
+    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'CORE_DENSITY_MIN', 0.1, 2, 0.05);
+    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'CORE_DENSITY_RANGE', 0, 3, 0.05);
 
     const pk = this.gui.addFolder('Pickups   (regen to apply)');
     this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'ENERGY_PICKUP_COUNT', 0, 100, 1);
@@ -177,6 +187,16 @@ export class TuningPanel {
     const base = this.gui.addFolder('Base   (baked at startup, display only)');
     base.add(BASE_TUNING, 'TRIGGER_RADIUS').disable();
     base.add(BASE_TUNING, 'CORE_SIZE').disable();
+
+    const fb = this.gui.addFolder('Feedback (shake / haptics)');
+    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'JERK_THRESHOLD', 0, 30, 0.1);
+    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'JERK_REF', 1, 200, 1);
+    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'THRUST_OPPOSE_REF', 0.5, 60, 0.5);
+    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'STRESS_RISE_TAU', 0.01, 1, 0.01);
+    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'STRESS_FALL_TAU', 0.05, 2, 0.01);
+    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'SHAKE_AMP', 0, 0.6, 0.005);
+    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'HAPTIC_MIN', 0, 1, 0.01);
+    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'HAPTIC_INTERVAL', 0.05, 1, 0.01);
 
     const audio = this.gui.addFolder('Audio');
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'MASTER_VOLUME', 0, 1, 0.01).onChange((v: number) => deps.audio.setMasterVolume(v));
@@ -303,6 +323,7 @@ export class TuningPanel {
     const dump = {
       SHIP_TUNING, GRAVITY_TUNING, ECONOMY_TUNING, ENERGY_TUNING,
       LIFECYCLE_TUNING, ASTEROID_TUNING, PICKUP_TUNING, BASE_TUNING, AUDIO_TUNING,
+      FEEDBACK_TUNING,
     };
     const text = JSON.stringify(dump, null, 2);
     if (navigator.clipboard?.writeText) {
@@ -331,6 +352,7 @@ export class TuningPanel {
     Object.assign(PICKUP_TUNING, this.defaults.PICKUP_TUNING);
     Object.assign(BASE_TUNING, this.defaults.BASE_TUNING);
     Object.assign(AUDIO_TUNING, this.defaults.AUDIO_TUNING);
+    Object.assign(FEEDBACK_TUNING, this.defaults.FEEDBACK_TUNING);
     this.gui.controllersRecursive().forEach((c) => c.updateDisplay());
     this.refreshResetButtons.forEach((refresh) => refresh());
     toast('tuning reset to defaults', 1400);

@@ -158,13 +158,9 @@ export class Input {
       if (pad.buttons[14]?.pressed) cmd.thrust.x -= 1;  // left
       if (pad.buttons[15]?.pressed) cmd.thrust.x += 1;  // right
 
-      // Boost: B button, or pull RT deep into the throw while thrusting.
-      // This keeps light/medium thrust free, while max trigger behaves like
-      // the ship's booster stage kicking in.
-      const triggerBoost = Math.max(0, (rt - 0.82) / 0.18);
+      // Boost: B button only. (RT is forward thrust and never drains energy.)
       cmd.boost = Math.max(
         cmd.boost,
-        triggerBoost,
         pad.buttons[1]?.value ?? (pad.buttons[1]?.pressed ? 1 : 0),
       );
 

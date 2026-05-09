@@ -296,11 +296,17 @@ export const SHIP_TUNING = {
   // Brake (LT) applies a velocity-damping force scaled by trigger value.
   // Higher = stronger brake.
   BRAKE_DAMPING: 2.6,
-  // Auto-overspeed damping. Above SPEED_ASSIST_START m/s, damping ramps in;
-  // peaks at SPEED_ASSIST_FULL with magnitude SPEED_ASSIST_DAMPING.
+  // Auto-overspeed damping. Off by default — space is empty, ships keep
+  // their velocity until brake (LT) or gravity does something. Bump
+  // SPEED_ASSIST_DAMPING above 0 in the tuning panel to re-enable a soft
+  // top-speed cap if you want one. Range: SPEED_ASSIST_START → FULL.
   SPEED_ASSIST_START: 95,
   SPEED_ASSIST_FULL: 297,
-  SPEED_ASSIST_DAMPING: 0.85,
+  SPEED_ASSIST_DAMPING: 0.0,
+  // Ambient gravity pull (m/s²) at which overspeed damping starts to fade
+  // (LO) and is fully suppressed (HI). Brake is unaffected.
+  SPEED_ASSIST_PULL_SUPPRESS_LO: 1.0,
+  SPEED_ASSIST_PULL_SUPPRESS_HI: 8.0,
 
   // Boost: extra forward thrust + faster energy drain while the boost input
   // is held. Applied as multiplier on forward thrust (1 = no change).
@@ -335,6 +341,7 @@ export class Ship {
   private _frozen = false;
   private _thrustEnabled = true;
   private _thrustScale = 1;
+  private _ambientPull = 0;
 
   constructor(physics: PhysicsWorld, scene: THREE.Scene) {
     this._physics = physics;
@@ -467,7 +474,14 @@ export class Ship {
 
     const brakeAmount = Math.max(0, cmd.thrust.z);
     const overspeed = Math.max(0, Math.min(1, (speed - SHIP_TUNING.SPEED_ASSIST_START) / (SHIP_TUNING.SPEED_ASSIST_FULL - SHIP_TUNING.SPEED_ASSIST_START)));
-    const damping = brakeAmount * SHIP_TUNING.BRAKE_DAMPING + overspeed * overspeed * SHIP_TUNING.SPEED_ASSIST_DAMPING;
+    // Fade overspeed assist out inside a real gravity well so slingshots
+    // accelerate the ship instead of getting damped back. Brake stays full.
+    const lo = SHIP_TUNING.SPEED_ASSIST_PULL_SUPPRESS_LO;
+    const hi = SHIP_TUNING.SPEED_ASSIST_PULL_SUPPRESS_HI;
+    const range = Math.max(0.0001, hi - lo);
+    const t = Math.max(0, Math.min(1, (this._ambientPull - lo) / range));
+    const wellSuppress = 1 - t * t * (3 - 2 * t);
+    const damping = brakeAmount * SHIP_TUNING.BRAKE_DAMPING + overspeed * overspeed * SHIP_TUNING.SPEED_ASSIST_DAMPING * wellSuppress;
     if (damping <= 0) return;
 
     const deltaV = Math.min(speed, speed * damping * dt);
@@ -515,6 +529,12 @@ export class Ship {
       this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
       this.updateBoostVisual(0);
     }
+  }
+
+  /** Latest ambient gravity pull magnitude (m/s²). Drives speed-assist
+   *  suppression so slingshots aren't damped inside wells. */
+  setAmbientPull(pull: number): void {
+    this._ambientPull = pull;
   }
 
   /** Disable thrust without freezing physics (e.g., out of energy). */
