@@ -118,6 +118,8 @@ It is not punishing in a way that feels unfair. Death has consequences but the f
 
 Browser, desktop first. Built in Three.js with Rapier physics. Single-player to start, with multiplayer as a future architectural layer once the core feel is established.
 
+This game will be hosted on Github Pages so design around that.
+
 The game is designed to be played with an Xbox controller. The Web Gamepad API supports this natively in browser — no installation, plug in and play. Left stick for thrust direction, right stick for camera/aim, triggers for boost and brake. Controller vibration is the hardware version of the hull shake. When it's working right, the controller should feel like the ship.
 
 ---

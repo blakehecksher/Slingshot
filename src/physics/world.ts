@@ -12,8 +12,9 @@ export class PhysicsWorld {
   readonly world: RAPIER.World;
   readonly eventQueue: RAPIER.EventQueue;
 
-  constructor() {
+  constructor(fixedDt: number) {
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+    this.world.timestep = fixedDt;
     this.eventQueue = new RAPIER.EventQueue(true);
   }
 

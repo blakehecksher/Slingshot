@@ -107,3 +107,5 @@ Module shape is a starting guess; refactor freely as Phase 1 reveals what wants 
 ## Notes
 
 Authoritative working copy of this plan also lives at `C:\Users\blake\.claude\plans\i-m-starting-a-new-robust-kettle.md` (harness path); this file is the AGENTS.md-tracked copy.
+
+2026-05-09 0054: M2-M5 are implemented in code. M6 remains active because the feel-test gate requires a human pass with the running build, ideally with an Xbox controller.
