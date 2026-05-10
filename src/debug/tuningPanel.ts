@@ -206,6 +206,8 @@ export class TuningPanel {
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_VOLUME', 0, 2, 0.01);
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_NEAR', 0, 200, 1);
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_FAR', 50, 800, 5);
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_PULL_MIN', 0, 20, 0.1);
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_PULL_FULL', 0, 30, 0.1);
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'FADE_TAU', 0.02, 1.5, 0.01);
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_PITCH_LOW', 0.5, 1.5, 0.01);
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_PITCH_HIGH', 0.5, 1.5, 0.01);

@@ -16,6 +16,7 @@ export interface ShipCommand {
   boost: number;
   // Edge events (true on the frame they fire, then auto-clear).
   toggleCameraMode: boolean;
+  cycleShipVisual: boolean;
 }
 
 const DEADZONE = 0.12;
@@ -39,6 +40,7 @@ export class Input {
 
   // Edge-triggered toggle requests, drained on each sample().
   private pendingCameraToggle = false;
+  private pendingShipCycle = false;
 
   // Previous gamepad button states, for edge detection.
   private prevPadButtons: boolean[] = [];
@@ -47,6 +49,7 @@ export class Input {
     window.addEventListener('keydown', (e) => {
       // KeyC toggles camera; consume on first press only (no repeat fire).
       if (e.code === 'KeyC' && !e.repeat) this.pendingCameraToggle = true;
+      if (e.code === 'KeyV' && !e.repeat) this.pendingShipCycle = true;
       this.keys.add(e.code);
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
         e.preventDefault();
@@ -127,6 +130,7 @@ export class Input {
       look: { yaw: 0, pitch: 0 },
       boost: 0,
       toggleCameraMode: false,
+      cycleShipVisual: false,
     };
 
     const pad = this.readGamepad();
@@ -167,6 +171,10 @@ export class Input {
       // Y button: camera mode toggle (edge-triggered).
       const yPressed = pad.buttons[3]?.pressed ?? false;
       if (yPressed && !this.prevPadButtons[3]) cmd.toggleCameraMode = true;
+
+      // X button: cycle ship visual (same behavior as keyboard V).
+      const xPressed = pad.buttons[2]?.pressed ?? false;
+      if (xPressed && !this.prevPadButtons[2]) cmd.cycleShipVisual = true;
 
       // Snapshot button states for next frame.
       this.prevPadButtons = pad.buttons.map((b) => b.pressed);
@@ -210,6 +218,10 @@ export class Input {
     if (this.pendingCameraToggle) {
       cmd.toggleCameraMode = true;
       this.pendingCameraToggle = false;
+    }
+    if (this.pendingShipCycle) {
+      cmd.cycleShipVisual = true;
+      this.pendingShipCycle = false;
     }
 
     cmd.thrust.x = clamp1(cmd.thrust.x);

@@ -1,9 +1,9 @@
 # State
-_Last updated: 2026-05-09 1921_
+_Last updated: 2026-05-09 2136_
 
 ## Current focus
 
-Phase 2.5 feel pass: gravity wells sharpened, slingshot restored. Speed assist now fades inside wells so flybys actually fling. Mass scales radius³ × per-rock core density. Dead Iron core ramp adds a near-surface "point of no return". Ready for live tuning via P panel before Phase 3.
+Phase 2.5 feel/polish pass: gravity wells sharpened, slingshot restored, ship thrust has readable directional visual feedback, and boost plumes are nozzle-anchored after browser inspection. Ready for live tuning via P panel before Phase 3.
 
 ## What's working
 
@@ -24,12 +24,16 @@ Phase 2.5 feel pass: gravity wells sharpened, slingshot restored. Speed assist n
 - Ship visual selection is available in the tuning panel and via V hotkey.
 - Ship asset pipeline spec exists at `docs/spec/ship-asset-pipeline.md`: kit-built manifests first, full GLB/GLTF models second, primitive procedural ships as fallback.
 - Gamepad: L-stick = pitch/roll, LB/RB = yaw right/left, RT/LT = forward/reverse, D-pad = strafe, B = boost, Y = camera toggle.
+- Gamepad X now cycles ship visual, matching keyboard V.
 - Visual polish pass:
   - ACES tone mapping + bloom render pipeline.
   - Deep-field nebula dome with background-only sun glow, richer star colors, and subtle distance fog.
   - Warm key, cyan rim, violet kicker, and hemisphere fill lights.
   - Ship/base/pickups use stronger emissive accents and local glow lights.
   - Medium/large asteroids have lightweight blue/orange mineral glints inspired by the setting concepts.
+  - Ship thrusters now visibly indicate normal forward thrust, boosted thrust, reverse thrust, and lateral/vertical strafe inputs.
+  - Boost plumes are anchored at nozzle bases so scaling extends outward rather than clipping through the hull.
+- Audio creak is now gated by meaningful gravity pull as well as clearance, reducing lingering metal creak outside active wells.
 
 ## Known issues
 
@@ -50,6 +54,8 @@ Phase 3: upgrades + persistence.
 docs/plans/2026-05-09 1921 Plan - Slingshot feel.md
 
 ## Recent logs
+- docs/log/2026-05-09 2136 Browser thrust and creak pass.md - verified boost plumes with Playwright, anchored plume geometry, gated creak by pull, and mapped gamepad X to ship cycling
+- docs/log/2026-05-09 2126 Directional thrust visuals.md - added directional ship plume feedback for forward, boost, reverse, and strafe thrust
 - docs/plans/2026-05-09 1921 Plan - Slingshot feel.md - sharpened wells, cube-scaled mass, core ramp, well-aware speed assist
 - docs/log/2026-05-09 1907 Ship asset pipeline.md - documented kit/full-model/primitive ship visual pipeline and future ship-builder direction
 - docs/log/2026-05-09 1908 Background sun fix.md - moved visible sun from reachable world mesh into the sky dome shader

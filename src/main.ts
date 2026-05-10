@@ -198,6 +198,7 @@ controls.innerHTML = `
   <div class="row">LB / RB - yaw right / left</div>
   <div class="row">D-pad - strafe (up/down/left/right)</div>
   <div class="row">B - boost (drains energy)</div>
+  <div class="row">X - cycle ship visual</div>
   <div class="row">Full RT - trigger boost stage</div>
   <div class="row">Y - toggle chase / cockpit cam</div>
   <div class="row" style="height:6px"></div>
@@ -226,10 +227,6 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyG' && !e.repeat) {
     padDebugVisible = !padDebugVisible;
     padDebug.style.display = padDebugVisible ? 'block' : 'none';
-  }
-  if (e.code === 'KeyV' && !e.repeat) {
-    ship.cycleVariant(1);
-    showToast(`SHIP ${ship.variantName}`, 1200);
   }
 });
 
@@ -300,6 +297,10 @@ function describeOther(handle1: number, handle2: number): { otherHandle: number;
 function tickPhysics(): void {
   const cmd = input.sample();
   if (cmd.toggleCameraMode) applyCameraToggle();
+  if (cmd.cycleShipVisual) {
+    ship.cycleVariant(1);
+    showToast(`SHIP ${ship.variantName}`, 1200);
+  }
   updateLook(cmd, FIXED_DT);
 
   // Pre-step ship speed — used for collision threshold so we measure energy

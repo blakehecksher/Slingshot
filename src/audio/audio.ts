@@ -15,11 +15,13 @@ export const AUDIO_TUNING = {
   RUMBLE_VOLUME: 0.9,
   RUMBLE_REF_PULL: 18.0,
   RUMBLE_CURVE: 1.4,
-  // Creak: clearance-driven. Below CREAK_NEAR clearance, creak ramps in;
-  // at CREAK_FAR (or further) silent. Inverted lerp.
+  // Creak: clearance + pull driven. Close rocks provide the stress shape, but
+  // weak far-field gravity should not keep the metal loop audible.
   CREAK_VOLUME: 0.85,
   CREAK_NEAR: 30,   // m — full volume at or below this clearance
-  CREAK_FAR: 280,   // m — silent at or beyond this clearance
+  CREAK_FAR: 180,   // m — silent at or beyond this clearance
+  CREAK_PULL_MIN: 2.0,
+  CREAK_PULL_FULL: 8.0,
   // Smoothing time-constant (sec). Bigger = slower fades. Felt-out value;
   // ~0.25s feels physical without being mushy.
   FADE_TAU: 0.22,
@@ -102,8 +104,11 @@ export class GameAudio {
 
     let creakTarget = 0;
     if (Number.isFinite(clearance) && clearance < AUDIO_TUNING.CREAK_FAR) {
-      const t = (AUDIO_TUNING.CREAK_FAR - clearance) / (AUDIO_TUNING.CREAK_FAR - AUDIO_TUNING.CREAK_NEAR);
-      creakTarget = AUDIO_TUNING.CREAK_VOLUME * Math.min(1, Math.max(0, t));
+      const nearT = (AUDIO_TUNING.CREAK_FAR - clearance) / (AUDIO_TUNING.CREAK_FAR - AUDIO_TUNING.CREAK_NEAR);
+      const pullRange = Math.max(0.0001, AUDIO_TUNING.CREAK_PULL_FULL - AUDIO_TUNING.CREAK_PULL_MIN);
+      const pullT = Math.max(0, Math.min(1, (pull - AUDIO_TUNING.CREAK_PULL_MIN) / pullRange));
+      const pullGate = pullT * pullT * (3 - 2 * pullT);
+      creakTarget = AUDIO_TUNING.CREAK_VOLUME * Math.min(1, Math.max(0, nearT)) * pullGate;
     }
 
     const k = 1 - Math.exp(-dt / AUDIO_TUNING.FADE_TAU);

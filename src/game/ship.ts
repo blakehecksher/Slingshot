@@ -11,8 +11,12 @@ import type { ShipCommand } from './input';
 interface BuiltShip {
   root: THREE.Object3D;
   attachments: Record<AttachmentName, THREE.Object3D>;
-  boostJets: THREE.Object3D[];
+  thrusters: ThrusterSet;
 }
+
+type ThrusterKey = 'main' | 'reverse' | 'strafeLeft' | 'strafeRight' | 'strafeUp' | 'strafeDown';
+
+type ThrusterSet = Record<ThrusterKey, THREE.Mesh[]>;
 
 export type AttachmentName =
   | 'nose'
@@ -81,6 +85,28 @@ function createShipMaterials(palette: ShipPalette = PALETTE) {
 
 type MaterialSet = ReturnType<typeof createShipMaterials>;
 
+function emptyThrusterSet(): ThrusterSet {
+  return {
+    main: [],
+    reverse: [],
+    strafeLeft: [],
+    strafeRight: [],
+    strafeUp: [],
+    strafeDown: [],
+  };
+}
+
+function plumeMaterial(color: number): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  });
+}
+
 function box(root: THREE.Object3D, size: [number, number, number], pos: [number, number, number], mat: THREE.Material, rot?: [number, number, number]): void {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), mat);
   mesh.position.set(pos[0], pos[1], pos[2]);
@@ -110,20 +136,47 @@ function canopy(root: THREE.Object3D, pos: [number, number, number], scale: [num
   root.add(mesh);
 }
 
-function addEngine(root: THREE.Object3D, jets: THREE.Object3D[], mats: MaterialSet, x: number, y: number, z: number, radius = 0.22, length = 0.85): void {
+function addPlume(
+  root: THREE.Object3D,
+  jets: THREE.Mesh[],
+  position: [number, number, number],
+  direction: [number, number, number],
+  radius: number,
+  length: number,
+  color: number,
+): void {
+  const geom = new THREE.ConeGeometry(radius, length, 14);
+  // ConeGeometry is centered by default. Move it so scaling grows outward from
+  // the nozzle instead of clipping back through the hull.
+  geom.translate(0, length * 0.5, 0);
+  const exhaust = new THREE.Mesh(geom, plumeMaterial(color));
+  exhaust.quaternion.setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(direction[0], direction[1], direction[2]).normalize(),
+  );
+  exhaust.position.set(position[0], position[1], position[2]);
+  exhaust.scale.setScalar(0.2);
+  exhaust.visible = false;
+  root.add(exhaust);
+  jets.push(exhaust);
+}
+
+function addEngine(root: THREE.Object3D, thrusters: ThrusterSet, mats: MaterialSet, x: number, y: number, z: number, radius = 0.22, length = 0.85): void {
   cyl(root, radius, length, [x, y, z], mats.engine, 16);
   const ring = new THREE.Mesh(new THREE.TorusGeometry(radius * 1.08, radius * 0.16, 8, 18), mats.accent);
   ring.rotation.y = Math.PI / 2;
   ring.position.set(x, y, z + length * 0.5);
   root.add(ring);
 
-  const exhaust = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.78, radius * 2.2, 14), mats.boost);
-  exhaust.rotation.x = Math.PI / 2;
-  exhaust.position.set(x, y, z + length * 0.5 + radius * 0.58);
-  exhaust.scale.setScalar(0.2);
-  exhaust.visible = false;
-  root.add(exhaust);
-  jets.push(exhaust);
+  addPlume(
+    root,
+    thrusters.main,
+    [x, y, z + length * 0.5 + radius * 0.58],
+    [0, 0, 1],
+    radius * 0.78,
+    radius * 2.2,
+    0xffb36a,
+  );
 }
 
 function attachPoints(root: THREE.Object3D): Record<AttachmentName, THREE.Object3D> {
@@ -145,7 +198,24 @@ function attachPoints(root: THREE.Object3D): Record<AttachmentName, THREE.Object
   };
 }
 
-function finishShip(root: THREE.Object3D, boostJets: THREE.Object3D[]): BuiltShip {
+function addManeuverThrusters(root: THREE.Object3D, thrusters: ThrusterSet): void {
+  addPlume(root, thrusters.reverse, [-0.48, 0.08, -1.7], [0, 0, -1], 0.11, 0.72, 0x6defff);
+  addPlume(root, thrusters.reverse, [0.48, 0.08, -1.7], [0, 0, -1], 0.11, 0.72, 0x6defff);
+
+  addPlume(root, thrusters.strafeLeft, [-1.25, -0.02, 0.45], [-1, 0, 0], 0.09, 0.58, 0x7dffb2);
+  addPlume(root, thrusters.strafeLeft, [-1.25, -0.02, 1.02], [-1, 0, 0], 0.08, 0.48, 0x7dffb2);
+  addPlume(root, thrusters.strafeRight, [1.25, -0.02, 0.45], [1, 0, 0], 0.09, 0.58, 0x7dffb2);
+  addPlume(root, thrusters.strafeRight, [1.25, -0.02, 1.02], [1, 0, 0], 0.08, 0.48, 0x7dffb2);
+
+  addPlume(root, thrusters.strafeUp, [-0.42, 0.48, 0.72], [0, 1, 0], 0.08, 0.5, 0x7dffb2);
+  addPlume(root, thrusters.strafeUp, [0.42, 0.48, 0.72], [0, 1, 0], 0.08, 0.5, 0x7dffb2);
+  addPlume(root, thrusters.strafeDown, [-0.42, -0.48, 0.72], [0, -1, 0], 0.08, 0.5, 0x7dffb2);
+  addPlume(root, thrusters.strafeDown, [0.42, -0.48, 0.72], [0, -1, 0], 0.08, 0.5, 0x7dffb2);
+}
+
+function finishShip(root: THREE.Object3D, thrusters: ThrusterSet): BuiltShip {
+  addManeuverThrusters(root, thrusters);
+
   const cockpitGlow = new THREE.PointLight(0x5defff, 1.2, 8, 2.2);
   cockpitGlow.position.set(0, 0.45, -0.45);
   root.add(cockpitGlow);
@@ -154,13 +224,13 @@ function finishShip(root: THREE.Object3D, boostJets: THREE.Object3D[]): BuiltShi
   engineGlow.position.set(0, -0.08, 1.55);
   root.add(engineGlow);
 
-  return { root, attachments: attachPoints(root), boostJets };
+  return { root, attachments: attachPoints(root), thrusters };
 }
 
 function buildSparrowShip(): BuiltShip {
   const root = new THREE.Group();
   const mats = createShipMaterials();
-  const boostJets: THREE.Object3D[] = [];
+  const thrusters = emptyThrusterSet();
 
   box(root, [1.3, 0.62, 1.6], [0, 0, 0], mats.hull);
   box(root, [0.95, 0.5, 0.9], [0, 0.02, -1.1], mats.hull);
@@ -178,19 +248,19 @@ function buildSparrowShip(): BuiltShip {
     );
     tip.position.set(side * 2.0, 0.0, 0.65);
     root.add(tip);
-    addEngine(root, boostJets, mats, side * 0.55, -0.12, 1.3, 0.24, 0.95);
+    addEngine(root, thrusters, mats, side * 0.55, -0.12, 1.3, 0.24, 0.95);
   }
 
   box(root, [0.08, 0.5, 0.55], [0, 0.5, 0.95], mats.trim);
   box(root, [0.09, 0.12, 0.4], [0, 0.78, 0.95], mats.accent);
 
-  return finishShip(root, boostJets);
+  return finishShip(root, thrusters);
 }
 
 function buildScrapperShip(): BuiltShip {
   const root = new THREE.Group();
   const mats = createShipMaterials({ ...PALETTE, hull: 0xd8c8a5, accent: 0xa84f35, cockpit: 0x9d6c2c, trim: 0x27313a });
-  const boostJets: THREE.Object3D[] = [];
+  const thrusters = emptyThrusterSet();
 
   cone(root, 0.43, 1.55, [0, -0.02, -1.85], mats.accent, 7);
   box(root, [1.05, 0.58, 1.45], [0, 0.0, -0.65], mats.hull);
@@ -208,18 +278,18 @@ function buildScrapperShip(): BuiltShip {
   for (const side of [-1, 1] as const) {
     box(root, [0.75, 0.08, 0.52], [side * 1.02, -0.02, 0.78], mats.hull, [0, side * 0.18, 0]);
     box(root, [0.16, 0.62, 0.58], [side * 1.42, 0.23, 1.08], mats.accent);
-    addEngine(root, boostJets, mats, side * 1.35, -0.02, 0.78, 0.22, 1.05);
+    addEngine(root, thrusters, mats, side * 1.35, -0.02, 0.78, 0.22, 1.05);
     cyl(root, 0.08, 0.72, [side * 0.72, -0.08, -0.82], mats.engine, 8);
   }
-  addEngine(root, boostJets, mats, 0, -0.04, 1.42, 0.36, 0.95);
+  addEngine(root, thrusters, mats, 0, -0.04, 1.42, 0.36, 0.95);
 
-  return finishShip(root, boostJets);
+  return finishShip(root, thrusters);
 }
 
 function buildTamarackShip(): BuiltShip {
   const root = new THREE.Group();
   const mats = createShipMaterials({ ...PALETTE, hull: 0x6d7055, accent: 0xc56a22, cockpit: 0x4c5a5d, trim: 0x1e211d });
-  const boostJets: THREE.Object3D[] = [];
+  const thrusters = emptyThrusterSet();
 
   box(root, [1.25, 0.72, 0.72], [0, 0.0, -1.25], mats.hull);
   cone(root, 0.55, 0.95, [0, -0.03, -1.98], mats.trim, 6);
@@ -235,18 +305,18 @@ function buildTamarackShip(): BuiltShip {
     box(root, [1.0, 0.12, 0.75], [side * 1.12, -0.05, 0.82], mats.hull, [0, side * -0.1, 0]);
     box(root, [0.68, 0.1, 0.35], [side * 1.85, -0.08, 1.04], mats.accent);
     box(root, [0.18, 0.55, 0.8], [side * 1.76, -0.46, 0.42], mats.engine);
-    addEngine(root, boostJets, mats, side * 0.42, -0.02, 1.45, 0.32, 0.9);
-    addEngine(root, boostJets, mats, side * 1.58, -0.22, 0.75, 0.18, 0.62);
+    addEngine(root, thrusters, mats, side * 0.42, -0.02, 1.45, 0.32, 0.9);
+    addEngine(root, thrusters, mats, side * 1.58, -0.22, 0.75, 0.18, 0.62);
     cyl(root, 0.16, 0.85, [side * 1.45, -0.18, -0.12], mats.cargo, 10);
   }
 
-  return finishShip(root, boostJets);
+  return finishShip(root, thrusters);
 }
 
 function buildCourierShip(): BuiltShip {
   const root = new THREE.Group();
   const mats = createShipMaterials({ ...PALETTE, hull: 0x152431, accent: 0xc45f22, cockpit: 0x23343b, trim: 0xcfc0a0 });
-  const boostJets: THREE.Object3D[] = [];
+  const thrusters = emptyThrusterSet();
 
   cone(root, 0.4, 1.65, [0, -0.02, -1.93], mats.trim, 7);
   box(root, [0.88, 0.5, 1.35], [0, 0.0, -0.8], mats.hull);
@@ -260,13 +330,13 @@ function buildCourierShip(): BuiltShip {
   for (const side of [-1, 1] as const) {
     box(root, [0.85, 0.08, 0.54], [side * 1.08, -0.03, 0.56], mats.hull, [0, side * 0.12, 0]);
     box(root, [0.15, 0.72, 0.58], [side * 1.34, 0.42, 1.1], mats.hull, [0, 0, side * 0.12]);
-    addEngine(root, boostJets, mats, side * 0.5, -0.12, 1.35, 0.24, 0.9);
-    addEngine(root, boostJets, mats, side * 0.96, -0.18, 1.24, 0.16, 0.72);
+    addEngine(root, thrusters, mats, side * 0.5, -0.12, 1.35, 0.24, 0.9);
+    addEngine(root, thrusters, mats, side * 0.96, -0.18, 1.24, 0.16, 0.72);
     cyl(root, 0.18, 0.95, [side * 0.92, -0.16, 0.55], mats.engine, 12);
   }
-  addEngine(root, boostJets, mats, 0, -0.05, 1.48, 0.28, 0.88);
+  addEngine(root, thrusters, mats, 0, -0.05, 1.48, 0.28, 0.88);
 
-  return finishShip(root, boostJets);
+  return finishShip(root, thrusters);
 }
 
 function buildShipVariant(variant: ShipVariantId): BuiltShip {
@@ -335,8 +405,15 @@ export class Ship {
   private _velocity = new THREE.Vector3();
   private _physics: PhysicsWorld;
   private _scene: THREE.Scene;
-  private _boostJets: THREE.Object3D[] = [];
-  private _currentBoost = 0;
+  private _thrusters: ThrusterSet = emptyThrusterSet();
+  private _thrustVisuals: Record<ThrusterKey, number> = {
+    main: 0,
+    reverse: 0,
+    strafeLeft: 0,
+    strafeRight: 0,
+    strafeUp: 0,
+    strafeDown: 0,
+  };
   private _variant: ShipVariantId;
   private _frozen = false;
   private _thrustEnabled = true;
@@ -367,7 +444,7 @@ export class Ship {
     const built = buildShipVariant(this._variant);
     this.mesh = built.root;
     this.attachments = built.attachments;
-    this._boostJets = built.boostJets;
+    this._thrusters = built.thrusters;
     scene.add(this.mesh);
   }
 
@@ -399,9 +476,9 @@ export class Ship {
         );
       }
       this.applySpeedAssist(cmd, dt);
-      this.updateBoostVisual(boost * Math.max(0, -cmd.thrust.z));
+      this.updateThrustVisuals(cmd, boost);
     } else {
-      this.updateBoostVisual(0);
+      this.clearThrustVisuals();
     }
 
     this._localAxis.set(
@@ -427,7 +504,7 @@ export class Ship {
     this.mesh = built.root;
     this.mesh.visible = wasVisible;
     this.attachments = built.attachments;
-    this._boostJets = built.boostJets;
+    this._thrusters = built.thrusters;
 
     this._scene.remove(oldMesh);
     this._scene.add(this.mesh);
@@ -450,19 +527,42 @@ export class Ship {
     return SHIP_VARIANTS[this._variant];
   }
 
-  private updateBoostVisual(amount: number): void {
+  private updateThrustVisuals(cmd: ShipCommand, boost: number): void {
+    const forward = Math.max(0, -cmd.thrust.z);
+    const reverse = Math.max(0, cmd.thrust.z);
+    const boostCharge = forward * Math.max(0, Math.min(1, boost));
+
+    this.setThrusterVisual('main', Math.max(forward * 0.55, boostCharge), 0.48 + boostCharge * 0.95, 0.75 + boostCharge * 1.9);
+    this.setThrusterVisual('reverse', reverse, 0.46, 0.85);
+    this.setThrusterVisual('strafeLeft', Math.max(0, cmd.thrust.x), 0.4, 0.7);
+    this.setThrusterVisual('strafeRight', Math.max(0, -cmd.thrust.x), 0.4, 0.7);
+    this.setThrusterVisual('strafeUp', Math.max(0, -cmd.thrust.y), 0.36, 0.62);
+    this.setThrusterVisual('strafeDown', Math.max(0, cmd.thrust.y), 0.36, 0.62);
+  }
+
+  private clearThrustVisuals(): void {
+    this.setThrusterVisual('main', 0, 0.48, 0.75);
+    this.setThrusterVisual('reverse', 0, 0.46, 0.85);
+    this.setThrusterVisual('strafeLeft', 0, 0.4, 0.7);
+    this.setThrusterVisual('strafeRight', 0, 0.4, 0.7);
+    this.setThrusterVisual('strafeUp', 0, 0.36, 0.62);
+    this.setThrusterVisual('strafeDown', 0, 0.36, 0.62);
+  }
+
+  private setThrusterVisual(key: ThrusterKey, amount: number, baseWidth: number, baseLength: number): void {
     const target = Math.max(0, Math.min(1, amount));
-    this._currentBoost += (target - this._currentBoost) * 0.35;
-    for (const jet of this._boostJets) {
-      jet.visible = this._currentBoost > 0.02;
+    const current = this._thrustVisuals[key] + (target - this._thrustVisuals[key]) * 0.35;
+    this._thrustVisuals[key] = current;
+
+    for (const jet of this._thrusters[key]) {
+      jet.visible = current > 0.02;
       jet.scale.set(
-        0.55 + this._currentBoost * 0.7,
-        0.55 + this._currentBoost * 0.7,
-        0.75 + this._currentBoost * 1.6,
+        baseWidth + current * 0.55,
+        baseLength + current * 1.15,
+        baseWidth + current * 0.55,
       );
-      const mesh = jet as THREE.Mesh;
-      const mat = mesh.material;
-      if (mat instanceof THREE.MeshBasicMaterial) mat.opacity = this._currentBoost * 0.95;
+      const mat = jet.material;
+      if (mat instanceof THREE.MeshBasicMaterial) mat.opacity = current * 0.92;
     }
   }
 
@@ -527,7 +627,7 @@ export class Ship {
     if (frozen) {
       this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-      this.updateBoostVisual(0);
+      this.clearThrustVisuals();
     }
   }
 
