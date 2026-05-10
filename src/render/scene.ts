@@ -11,6 +11,10 @@ export interface RenderRig {
   composer: EffectComposer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
+  // Background container (dome + stars). Each frame `skybox.position` should
+  // be copied from the camera so they read as infinitely far rather than as
+  // the boundary of a finite sphere.
+  skybox: THREE.Group;
 }
 
 export function createRenderRig(canvas: HTMLCanvasElement): RenderRig {
@@ -32,7 +36,9 @@ export function createRenderRig(canvas: HTMLCanvasElement): RenderRig {
     20000,
   );
 
-  scene.add(buildNebulaDome(9200));
+  const skybox = new THREE.Group();
+  skybox.add(buildNebulaDome(9200));
+  scene.add(skybox);
 
   const key = new THREE.DirectionalLight(0xffb16a, 3.1);
   key.position.set(-0.72, 0.34, 0.58).multiplyScalar(4000);
@@ -48,7 +54,7 @@ export function createRenderRig(canvas: HTMLCanvasElement): RenderRig {
 
   scene.add(new THREE.HemisphereLight(0x315d74, 0x160d0a, 0.58));
 
-  scene.add(buildStarfield(3400, 8800));
+  skybox.add(buildStarfield(3400, 8800));
 
   const composer = new EffectComposer(renderer);
   composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -70,7 +76,7 @@ export function createRenderRig(canvas: HTMLCanvasElement): RenderRig {
     camera.updateProjectionMatrix();
   });
 
-  return { renderer, composer, scene, camera };
+  return { renderer, composer, scene, camera, skybox };
 }
 
 function buildNebulaDome(radius: number): THREE.Mesh {

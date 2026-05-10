@@ -4,12 +4,15 @@ import { AUDIO_TUNING, type GameAudio } from '../audio/audio';
 import { ASTEROID_TUNING, AsteroidField } from '../game/asteroids';
 import { BASE_TUNING } from '../game/base';
 import { ECONOMY_TUNING } from '../game/economy';
+import { ENEMY_TUNING } from '../game/enemies';
 import { ENERGY_TUNING } from '../game/energy';
 import { FEEDBACK_TUNING } from '../game/feedback';
 import { GRAVITY_TUNING } from '../game/gravity';
 import { LIFECYCLE_TUNING } from '../game/lifecycle';
 import { PICKUP_TUNING, PickupSystem } from '../game/pickups';
 import { SHIP_TUNING, SHIP_VARIANTS, SHIP_VISUALS, type Ship, type ShipVariantId } from '../game/ship';
+import { WEAPON_TUNING } from '../game/weapons';
+import { ZONE_TUNING } from '../game/zones';
 
 const LIVE = {
   fps: 0, speed: 0, cargo: 0, bank: 0, energy: 0,
@@ -45,7 +48,10 @@ type TuningGroupKey =
   | 'PICKUP_TUNING'
   | 'BASE_TUNING'
   | 'AUDIO_TUNING'
-  | 'FEEDBACK_TUNING';
+  | 'FEEDBACK_TUNING'
+  | 'WEAPON_TUNING'
+  | 'ENEMY_TUNING'
+  | 'ZONE_TUNING';
 
 type TunableRecord = Record<string, number>;
 
@@ -66,6 +72,9 @@ export class TuningPanel {
     BASE_TUNING: snapshot(BASE_TUNING),
     AUDIO_TUNING: snapshot(AUDIO_TUNING),
     FEEDBACK_TUNING: snapshot(FEEDBACK_TUNING),
+    WEAPON_TUNING: snapshot(WEAPON_TUNING),
+    ENEMY_TUNING: snapshot(ENEMY_TUNING),
+    ZONE_TUNING: snapshot(ZONE_TUNING),
   };
 
   constructor(deps: TuningPanelDeps) {
@@ -118,6 +127,8 @@ export class TuningPanel {
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_PULL_SUPPRESS_HI', 0.5, 60, 0.1);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'BOOST_THRUST_MULT', 1, 8, 0.05);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'BOOST_ENERGY_MULT', 1, 12, 0.1);
+    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'CARGO_THRUST_PENALTY', 0, 2, 0.01);
+    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'CARGO_AGILITY_PENALTY', 0, 2, 0.01);
 
     const gravity = this.gui.addFolder('Gravity');
     this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'G', 0, 0.2, 0.001);
@@ -153,16 +164,14 @@ export class TuningPanel {
     this.addTunable(life, 'LIFECYCLE_TUNING', LIFECYCLE_TUNING, 'INVULN_AFTER_RESPAWN_MS', 0, 5000, 50);
 
     const ast = this.gui.addFolder('Asteroids   (regen to apply)');
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'PROCEDURAL_COUNT', 0, 400, 1);
+    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'PROCEDURAL_COUNT', 0, 2000, 5);
     this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIUS_MIN', 1, 80, 0.5);
     this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIUS_RANGE', 1, 250, 1);
     this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIUS_POWER', 0.5, 6, 0.05);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'BAND_INNER', 0, 1500, 10);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'BAND_RANGE', 100, 5000, 25);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'BAND_JITTER', 0, 800, 5);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'Z_NEAR', -2000, 0, 10);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'Z_DEPTH', 200, 8000, 50);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'Y_RANGE', 0, 1500, 10);
+    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'SPHERE_INNER', 50, 3000, 10);
+    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'SPHERE_OUTER', 1000, 9000, 50);
+    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIAL_BIAS', 0.3, 2.0, 0.05);
+    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'SIZE_INNER_MAX', 0.05, 1.0, 0.01);
     this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'DRIFT_MIN', 0, 5, 0.05);
     this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'DRIFT_RANGE', 0, 5, 0.05);
     this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'ROT_MIN', 0, 0.5, 0.005);
@@ -198,6 +207,22 @@ export class TuningPanel {
     this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'HAPTIC_MIN', 0, 1, 0.01);
     this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'HAPTIC_INTERVAL', 0.05, 1, 0.01);
 
+    const wpn = this.gui.addFolder('Weapons / Combat');
+    this.addTunable(wpn, 'WEAPON_TUNING', WEAPON_TUNING, 'PROJECTILE_TTL_SEC', 0.5, 8, 0.1);
+    this.addTunable(wpn, 'WEAPON_TUNING', WEAPON_TUNING, 'PROJECTILE_RADIUS', 0.1, 2, 0.05);
+    this.addTunable(wpn, 'WEAPON_TUNING', WEAPON_TUNING, 'PROJECTILE_DENSITY', 0.001, 0.5, 0.005);
+    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'COUNT', 0, 200, 1);
+    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'ENGAGE_RANGE', 100, 3000, 25);
+    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'FIRE_RANGE', 100, 2000, 25);
+    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'MAX_SPEED', 20, 300, 1);
+    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'HP_MAX', 5, 500, 1);
+    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'BANK_REWARD_KG', 0, 1000, 5);
+    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'CARGO_REWARD_KG', 0, 1000, 5);
+
+    const zones = this.gui.addFolder('Zones');
+    this.addTunable(zones, 'ZONE_TUNING', ZONE_TUNING, 'OPEN_RADIUS', 100, 5000, 25);
+    this.addTunable(zones, 'ZONE_TUNING', ZONE_TUNING, 'DEEP_RADIUS', 500, 8000, 25);
+
     const audio = this.gui.addFolder('Audio');
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'MASTER_VOLUME', 0, 1, 0.01).onChange((v: number) => deps.audio.setMasterVolume(v));
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'RUMBLE_VOLUME', 0, 2, 0.01);
@@ -211,6 +236,14 @@ export class TuningPanel {
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'FADE_TAU', 0.02, 1.5, 0.01);
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_PITCH_LOW', 0.5, 1.5, 0.01);
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_PITCH_HIGH', 0.5, 1.5, 0.01);
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CARGO_HUM_VOLUME', 0, 1, 0.01);
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CARGO_HUM_PITCH_LOW', 30, 400, 1);
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CARGO_HUM_PITCH_HIGH', 30, 600, 1);
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_LASER_VOLUME', 0, 1, 0.01);
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_HIT_VOLUME', 0, 1, 0.01);
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_DESTROY_VOLUME', 0, 1, 0.01);
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_PICKUP_VOLUME', 0, 1, 0.01);
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_DEPOSIT_VOLUME', 0, 1, 0.01);
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'KeyP' && !e.repeat) this.toggle();
@@ -325,7 +358,7 @@ export class TuningPanel {
     const dump = {
       SHIP_TUNING, GRAVITY_TUNING, ECONOMY_TUNING, ENERGY_TUNING,
       LIFECYCLE_TUNING, ASTEROID_TUNING, PICKUP_TUNING, BASE_TUNING, AUDIO_TUNING,
-      FEEDBACK_TUNING,
+      FEEDBACK_TUNING, WEAPON_TUNING, ENEMY_TUNING, ZONE_TUNING,
     };
     const text = JSON.stringify(dump, null, 2);
     if (navigator.clipboard?.writeText) {
@@ -355,6 +388,9 @@ export class TuningPanel {
     Object.assign(BASE_TUNING, this.defaults.BASE_TUNING);
     Object.assign(AUDIO_TUNING, this.defaults.AUDIO_TUNING);
     Object.assign(FEEDBACK_TUNING, this.defaults.FEEDBACK_TUNING);
+    Object.assign(WEAPON_TUNING, this.defaults.WEAPON_TUNING);
+    Object.assign(ENEMY_TUNING, this.defaults.ENEMY_TUNING);
+    Object.assign(ZONE_TUNING, this.defaults.ZONE_TUNING);
     this.gui.controllersRecursive().forEach((c) => c.updateDisplay());
     this.refreshResetButtons.forEach((refresh) => refresh());
     toast('tuning reset to defaults', 1400);

@@ -28,6 +28,16 @@ export const AUDIO_TUNING = {
   // Pitch shift on creak as pull rises — subtle feel boost. 1.0 = no shift.
   CREAK_PITCH_LOW: 0.93,
   CREAK_PITCH_HIGH: 1.08,
+  // Cargo pod hum: rises with cargo fraction. Synthesized.
+  CARGO_HUM_VOLUME: 0.22,
+  CARGO_HUM_PITCH_LOW: 80,
+  CARGO_HUM_PITCH_HIGH: 220,
+  // SFX volumes.
+  SFX_LASER_VOLUME: 0.22,
+  SFX_HIT_VOLUME: 0.4,
+  SFX_DESTROY_VOLUME: 0.55,
+  SFX_PICKUP_VOLUME: 0.32,
+  SFX_DEPOSIT_VOLUME: 0.45,
 };
 
 interface Loop {
@@ -40,8 +50,10 @@ interface Loop {
 export class GameAudio {
   private ctx?: AudioContext;
   private master?: GainNode;
+  private sfxGain?: GainNode;
   private rumble?: Loop;
   private creak?: Loop;
+  private cargoHum?: { gain: GainNode; osc: OscillatorNode; sub: OscillatorNode; subGain: GainNode; current: number } | undefined;
   private unlocked = false;
   private starting = false;
   private baseUrl: string;
@@ -65,6 +77,10 @@ export class GameAudio {
     this.master.gain.value = AUDIO_TUNING.MASTER_VOLUME;
     this.master.connect(this.ctx.destination);
 
+    this.sfxGain = this.ctx.createGain();
+    this.sfxGain.gain.value = 1;
+    this.sfxGain.connect(this.master);
+
     try {
       const [rumbleBuf, creakBuf] = await Promise.all([
         this.loadBuffer('sounds/gravity-rumble.mp3'),
@@ -75,6 +91,31 @@ export class GameAudio {
     } catch (err) {
       console.warn('[audio] failed to load sound buffers', err);
     }
+
+    this.cargoHum = this.makeCargoHum();
+  }
+
+  private makeCargoHum() {
+    if (!this.ctx || !this.master) return undefined;
+    const gain = this.ctx.createGain();
+    gain.gain.value = 0;
+    gain.connect(this.master);
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = AUDIO_TUNING.CARGO_HUM_PITCH_LOW;
+    const oscGain = this.ctx.createGain();
+    oscGain.gain.value = 0.4;
+    osc.connect(oscGain).connect(gain);
+
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.value = AUDIO_TUNING.CARGO_HUM_PITCH_LOW * 0.5;
+    const subGain = this.ctx.createGain();
+    subGain.gain.value = 0.6;
+    sub.connect(subGain).connect(gain);
+
+    return { gain, osc, sub, subGain, current: 0 };
   }
 
   /** Resume the AudioContext + start the looping sources. Call from a user
@@ -85,6 +126,14 @@ export class GameAudio {
     void this.ctx.resume().then(() => {
       if (this.rumble) this.rumble.source.start(0);
       if (this.creak) this.creak.source.start(0);
+      if (this.cargoHum) {
+        try {
+          this.cargoHum.osc.start(0);
+          this.cargoHum.sub.start(0);
+        } catch {
+          // already started
+        }
+      }
       this.unlocked = true;
       this.starting = false;
     }).catch((err) => {
@@ -94,7 +143,7 @@ export class GameAudio {
   }
 
   /** Per render frame. Drives the gain envelopes from gravity signals. */
-  update(pull: number, clearance: number, dt: number): void {
+  update(pull: number, clearance: number, dt: number, cargoFraction = 0): void {
     if (!this.ctx || !this.unlocked) return;
 
     const rumbleTarget = AUDIO_TUNING.RUMBLE_VOLUME * Math.pow(
@@ -125,6 +174,112 @@ export class GameAudio {
       const rate = AUDIO_TUNING.CREAK_PITCH_LOW + (AUDIO_TUNING.CREAK_PITCH_HIGH - AUDIO_TUNING.CREAK_PITCH_LOW) * pullN;
       this.creak.source.playbackRate.value = rate;
     }
+    if (this.cargoHum) {
+      const cargoT = Math.max(0, Math.min(1, cargoFraction));
+      const targetVol = AUDIO_TUNING.CARGO_HUM_VOLUME * cargoT * cargoT;
+      this.cargoHum.current += (targetVol - this.cargoHum.current) * k;
+      this.cargoHum.gain.gain.value = this.cargoHum.current;
+      const pitch = AUDIO_TUNING.CARGO_HUM_PITCH_LOW
+        + (AUDIO_TUNING.CARGO_HUM_PITCH_HIGH - AUDIO_TUNING.CARGO_HUM_PITCH_LOW) * cargoT;
+      this.cargoHum.osc.frequency.setTargetAtTime(pitch, this.ctx!.currentTime, 0.05);
+      this.cargoHum.sub.frequency.setTargetAtTime(pitch * 0.5, this.ctx!.currentTime, 0.05);
+    }
+  }
+
+  // ----- One-shot SFX synthesizers. Chosen to be cheap, distinct, and
+  // tonally consistent with the existing rumble/creak palette.
+
+  laser(): void {
+    if (!this.ctx || !this.sfxGain || !this.unlocked) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'square';
+    o.frequency.setValueAtTime(880, t);
+    o.frequency.exponentialRampToValueAtTime(220, t + 0.18);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(AUDIO_TUNING.SFX_LASER_VOLUME, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t);
+    o.stop(t + 0.22);
+  }
+
+  hit(): void {
+    if (!this.ctx || !this.sfxGain || !this.unlocked) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(140, t);
+    o.frequency.exponentialRampToValueAtTime(60, t + 0.16);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(AUDIO_TUNING.SFX_HIT_VOLUME, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t);
+    o.stop(t + 0.2);
+  }
+
+  destroy(): void {
+    if (!this.ctx || !this.sfxGain || !this.unlocked) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.8, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      const env = Math.pow(1 - i / data.length, 1.6);
+      data[i] = (Math.random() * 2 - 1) * env;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2000, t);
+    lp.frequency.exponentialRampToValueAtTime(180, t + 0.7);
+    const g = ctx.createGain();
+    g.gain.value = AUDIO_TUNING.SFX_DESTROY_VOLUME;
+    src.connect(lp).connect(g).connect(this.sfxGain);
+    src.start(t);
+    src.stop(t + 0.85);
+  }
+
+  pickupChime(): void {
+    if (!this.ctx || !this.sfxGain || !this.unlocked) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const tones = [880, 1320];
+    tones.forEach((f, idx) => {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(f, t + idx * 0.04);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t + idx * 0.04);
+      g.gain.exponentialRampToValueAtTime(AUDIO_TUNING.SFX_PICKUP_VOLUME, t + idx * 0.04 + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + idx * 0.04 + 0.2);
+      o.connect(g).connect(this.sfxGain!);
+      o.start(t + idx * 0.04);
+      o.stop(t + idx * 0.04 + 0.22);
+    });
+  }
+
+  deposit(): void {
+    if (!this.ctx || !this.sfxGain || !this.unlocked) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'square';
+    o.frequency.setValueAtTime(160, t);
+    o.frequency.exponentialRampToValueAtTime(80, t + 0.5);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(AUDIO_TUNING.SFX_DEPOSIT_VOLUME, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t);
+    o.stop(t + 0.62);
   }
 
   setMasterVolume(v: number): void {

@@ -19,27 +19,29 @@ export interface Asteroid {
 // their positions are deliberate landmarks. Regenerate the field via
 // AsteroidField.regenerate() to apply changes to existing runs.
 export const ASTEROID_TUNING = {
-  PROCEDURAL_COUNT: 150,
-  RADIUS_MIN: 10,
-  RADIUS_RANGE: 150,
-  RADIUS_POWER: 2.4,
-  BAND_INNER: 260,
-  BAND_RANGE: 2350,
-  BAND_JITTER: 220,
-  Z_NEAR: 0,
-  Z_DEPTH: 8000,
-  Y_RANGE: 1500,
+  PROCEDURAL_COUNT: 900,
+  RADIUS_MIN: 8,
+  RADIUS_RANGE: 240,
+  // Lower power = flatter distribution = more medium and large rocks.
+  RADIUS_POWER: 1.5,
+  // Sphere shell. INNER is clear zone around base (no rocks within); OUTER
+  // fills almost to skybox (stars at 8800).
+  SPHERE_INNER: 520,
+  SPHERE_OUTER: 8200,
+  // 1.0 = uniform-volume; <1 packs more rocks inward, >1 outward.
+  RADIAL_BIAS: 1.0,
+  // Size-by-radius bias. At the inner shell, max rock size is capped at this
+  // fraction of full RADIUS_RANGE. Linearly opens up to 1.0 at outer shell.
+  // Keeps gigantic rocks in the deep field where the player has time to see
+  // them and learn the well, instead of spawning a 230m core next to base.
+  SIZE_INNER_MAX: 0.32,
   DRIFT_MIN: 0.15,
   DRIFT_RANGE: 0.75,
   ROT_MIN: 0.015,
   ROT_RANGE: 0.045,
-  // Mass = radius^MASS_RADIUS_POWER × MASS_COEF × coreDensity. Cube scaling
-  // (P=3) makes large rocks dominate the field — concentrated Dead Iron
-  // cores per spec §4. Bigger coef = stronger wells across the board.
+  // Mass = radius^MASS_RADIUS_POWER × MASS_COEF × coreDensity.
   MASS_COEF: 8,
   MASS_RADIUS_POWER: 3,
-  // Per-rock core density roll. Some look ordinary but pull harder than
-  // their size suggests — rewards pilots who learn to read the field.
   CORE_DENSITY_MIN: 0.55,
   CORE_DENSITY_RANGE: 1.2,
 };
@@ -178,7 +180,6 @@ export class AsteroidField {
     this.scene = scene;
     this.physics = physics;
     this.registry = registry;
-    this.addHandPlaced();
     this.addProcedural();
   }
 
@@ -201,21 +202,7 @@ export class AsteroidField {
       a.mesh.geometry.dispose();
     }
     this.asteroids.length = 0;
-    this.addHandPlaced();
     this.addProcedural();
-  }
-
-  private addHandPlaced(): void {
-    const placements: Array<[number, number, number, number]> = [
-      [105, -240, 30, -620],
-      [70, 280, -65, -980],
-      [145, -90, 140, -1380],
-      [48, 160, 110, -420],
-      [92, -460, -120, -1140],
-    ];
-    placements.forEach(([radius, x, y, z], index) => {
-      this.asteroids.push(makeAsteroid(this.scene, this.physics, this.registry, radius, new THREE.Vector3(x, y, z), 100 + index));
-    });
   }
 
   private addProcedural(): void {
@@ -223,12 +210,22 @@ export class AsteroidField {
     for (let i = 0; i < t.PROCEDURAL_COUNT; i++) {
       const seed = 200 + i * 13.37;
       const sizeRoll = seededNoise(seed);
-      const radius = t.RADIUS_MIN + Math.pow(sizeRoll, t.RADIUS_POWER) * t.RADIUS_RANGE;
-      const angle = seededNoise(seed + 1) * Math.PI * 2;
-      const band = t.BAND_INNER + seededNoise(seed + 2) * t.BAND_RANGE;
-      const x = Math.cos(angle) * band + (seededNoise(seed + 3) * 2 - 1) * t.BAND_JITTER;
-      const z = t.Z_NEAR - seededNoise(seed + 4) * t.Z_DEPTH;
-      const y = (seededNoise(seed + 5) * 2 - 1) * t.Y_RANGE;
+      // Uniform points in a spherical shell. cube root of [0,1] → uniform
+      // by volume; raise to RADIAL_BIAS to pack inward.
+      const u = seededNoise(seed + 1);
+      const v = seededNoise(seed + 2);
+      const wRoll = seededNoise(seed + 3);
+      const theta = u * Math.PI * 2;
+      const phi = Math.acos(2 * v - 1);
+      const radialT = Math.pow(wRoll, t.RADIAL_BIAS); // 0 inner → 1 outer
+      const r = t.SPHERE_INNER + (t.SPHERE_OUTER - t.SPHERE_INNER) * radialT;
+      const x = r * Math.sin(phi) * Math.cos(theta);
+      const y = r * Math.sin(phi) * Math.sin(theta);
+      const z = r * Math.cos(phi);
+      // Size cap grows with radius. Inner-shell rocks are small; deep-field
+      // rocks can be giants.
+      const sizeCap = t.SIZE_INNER_MAX + (1 - t.SIZE_INNER_MAX) * radialT;
+      const radius = t.RADIUS_MIN + Math.pow(sizeRoll, t.RADIUS_POWER) * t.RADIUS_RANGE * sizeCap;
       const driftScale = t.DRIFT_MIN + seededNoise(seed + 6) * t.DRIFT_RANGE;
       const velocity = new THREE.Vector3(
         seededNoise(seed + 7) * 2 - 1,

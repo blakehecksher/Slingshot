@@ -71,3 +71,27 @@ Reason: Direct angular velocity gives snappy, predictable controls that match an
 Decision: Ship visuals should resolve in this order per variant: kit-built manifest, full GLB/GLTF model, procedural primitive fallback.
 Reason: Kit-built ships support future ship construction and visible upgrades; full models support AI-generated or commissioned assets; primitive fallbacks keep the game playable while assets are missing or in progress.
 Supersedes: none
+
+## 2026-05-10 0057 - Kit parts ARE upgrades (no separate UPGRADE_DEFS)
+
+Decision: Drop the originally-planned separate `UPGRADE_DEFS` system. The kit-built ship parts in `src/render/shipVisual/builtinParts.ts` carry their own `PartStatDelta`. Mounting a part = applying its mods.
+Reason: Two parallel catalogs (parts + upgrades) duplicated data and forced reconciliation in the hangar UI. Single source of truth (`computeModsFromParts`) is simpler and matches the long-term ship-builder direction in `docs/spec/ship-asset-pipeline.md`.
+Supersedes: plan §2 ("UPGRADE_DEFS") in `docs/plans/2026-05-10 0057 Plan - Rest of game.md`.
+
+## 2026-05-10 0057 - Save format: localStorage v1, drop on version mismatch
+
+Decision: Save data lives at `localStorage["slingshot.save.v1"]`. On version mismatch the old save is dropped silently rather than migrated.
+Reason: Pre-release single-player; no users to migrate. Simpler than half-finished migration code that drifts. Bump `SAVE_VERSION` to invalidate.
+Supersedes: none
+
+## 2026-05-10 0057 - Combat is gravity-curving projectiles
+
+Decision: Projectiles are full Rapier dynamic bodies that receive gravity acceleration from `sampleGravityAt` each tick.
+Reason: Vision §"Enemies": "Combat is a gravity problem. Projectiles curve in gravity wells." Sharing the same gravity sampler the player uses guarantees the visual matches the prediction. Cost is a few dynamic bodies — negligible at expected projectile counts.
+Supersedes: none
+
+## 2026-05-10 0057 - Hangar pauses physics; B/Tab opens at base only
+
+Decision: Hangar UI is a DOM overlay. Opening it freezes the player ship and short-circuits `tickPhysics`. Only valid while inside the base trigger sensor.
+Reason: A ship-builder mid-flight invites accidental triggers. Coupling it to docking matches the fiction ("dock at base"). DOM overlay avoids spinning a second 3D scene; a small Three.js renderer inside the overlay handles only the live preview.
+Supersedes: none

@@ -7,6 +7,7 @@ import { Energy, ENERGY_TUNING } from './game/energy';
 import { SHIP_TUNING } from './game/ship';
 import { GravityFeedback } from './game/feedback';
 import { sampleGravityAt } from './game/gravity';
+import { HangarState } from './game/hangar';
 import { Input } from './game/input';
 import { Lifecycle, LIFECYCLE_TUNING } from './game/lifecycle';
 import { PickupSystem } from './game/pickups';
@@ -19,6 +20,14 @@ import { createRenderRig } from './render/scene';
 import { TrajectoryRibbon } from './render/trajectory';
 import { TuningPanel } from './debug/tuningPanel';
 import { GameAudio } from './audio/audio';
+import { HangarUI } from './render/hangarUI';
+import { computeModsFromParts, defaultManifest, applyCost as upgradeApplyCost, manifestPartCost } from './game/upgrades';
+import { resolveShipVisual } from './render/shipVisual';
+import { WeaponSystem, PlayerWeaponController, WEAPON_TUNING } from './game/weapons';
+import { EnemyManager, ENEMY_TUNING } from './game/enemies';
+import { zoneFor, zoneLabel, type FieldZone } from './game/zones';
+import { ReticleHUD } from './render/reticle';
+import * as persistence from './game/persistence';
 
 const canvas = document.getElementById('app') as HTMLCanvasElement;
 const hud = document.getElementById('hud') as HTMLDivElement;
@@ -42,10 +51,14 @@ window.addEventListener('gamepadconnected', unlockAudio);
 const FIXED_DT = 1 / 120;
 const MAX_STEPS_PER_FRAME = 8;
 
-const { renderer, composer, scene, camera } = createRenderRig(canvas);
+const { renderer, composer, scene, camera, skybox } = createRenderRig(canvas);
 const physics = new PhysicsWorld(FIXED_DT);
 const input = new Input(canvas);
 const registry = new ContactRegistry();
+
+// --- Persistence ---
+let save = persistence.load();
+let manifest = save.manifest?.inline ?? defaultManifest();
 
 const ship = new Ship(physics, scene);
 const dust = new SpaceDust(scene);
@@ -55,18 +68,42 @@ const minimap = new Minimap();
 const feedback = new GravityFeedback();
 
 const economy = new Economy();
+economy.setBank(save.bank);
 const energy = new Energy();
 const pickups = new PickupSystem(scene, physics, registry);
+const weapons = new WeaponSystem(scene, physics, registry);
+const enemies = new EnemyManager(scene, physics, registry, weapons, pickups);
+const playerWeapons = new PlayerWeaponController(weapons);
+const reticle = new ReticleHUD();
+let lockedEnemyId: number | null = null;
+const tmpShipPos = new THREE.Vector3();
+const tmpShipVel = new THREE.Vector3();
+const tmpEnemyPos = new THREE.Vector3();
+const tmpEnemyVel = new THREE.Vector3();
+const tmpForwardWorld = new THREE.Vector3();
+const tmpToEnemy = new THREE.Vector3();
 
 const BASE_POS = new THREE.Vector3(0, 0, 0);
 createBase(scene, physics, registry, BASE_POS);
 
-// Place the player slightly forward of the base so they aren't immediately
-// "deposited" by the trigger and so the base reads as something to fly back to.
 const SPAWN_POS = new THREE.Vector3(0, 0, 180);
 ship.teleport(SPAWN_POS);
 
 pickups.seedEnergyField();
+enemies.seed(asteroidField.asteroids);
+
+// Apply initial mods derived from saved/default manifest.
+applyManifestMods();
+void resolveAndSwapShipVisual();
+
+const hangar = new HangarState(manifest.parts);
+const hangarUI = new HangarUI({
+  hangar,
+  getBank: () => economy.bank,
+  getOwned: () => save.upgradesOwned,
+  onApply: (cost) => applyHangarChanges(cost),
+  onCancel: () => closeHangar(),
+});
 
 const tuningPanel = new TuningPanel({
   ship,
@@ -77,17 +114,15 @@ const tuningPanel = new TuningPanel({
   onToast: (msg, dur) => showToast(msg, dur),
 });
 
+let runStartedAt = performance.now();
+let runStartBank = economy.bank;
+
 const lifecycle = new Lifecycle(ship, SPAWN_POS, {
   onDeath: (deathPos, deathVel) => {
-    // Scatter cargo at death position.
     const { chunkValueKg, count } = economy.consumeScatter();
     if (count > 0) {
       const inherit = ECONOMY_TUNING.SCATTER_DRIFT_INHERIT;
       const rand = ECONOMY_TUNING.SCATTER_RAND_VEL;
-      // Push scatter offsets out perpendicular to the impact direction. The
-      // ship was moving toward the asteroid, so reversing along that axis
-      // and adding a wider random spread tends to keep chunks outside the
-      // rock — they sit in collectable space instead of inside geometry.
       const back = deathVel.clone().normalize().multiplyScalar(-1);
       for (let i = 0; i < count; i++) {
         const offset = back.clone().multiplyScalar(35 + Math.random() * 20).add(
@@ -105,10 +140,14 @@ const lifecycle = new Lifecycle(ship, SPAWN_POS, {
         pickups.spawnCargo(deathPos.clone().add(offset), vel, chunkValueKg);
       }
     }
+    save.stats.shipsLost += 1;
+    persistence.save(save);
+    audio.destroy();
     showToast(`SHIP LOST  cargo scattered: ${count} chunks`, 1800);
   },
   onRespawn: () => {
     energy.refill();
+    ship.refillHp();
     peakSpeed = 0;
     hasPrevVelocity = false;
   },
@@ -140,12 +179,95 @@ const prevVelocity = new THREE.Vector3();
 let hasPrevVelocity = false;
 let accelMag = 0;
 let peakSpeed = 0;
+let currentZone: FieldZone = 'open';
 
 let trajectory: Trajectory = predictTrajectory(ship.position, ship.linearVelocity, asteroidField.asteroids);
 let gravitySample = sampleGravityAt(shipPosVec.copy(SPAWN_POS), asteroidField.asteroids);
 
-// Track whether ship is inside base trigger so we deposit only on entry.
 let inBase = false;
+
+/** Find best lock target: alive enemy in front cone, biased to dot product. */
+function pickLockTarget(): number | null {
+  const r = ship.body.rotation();
+  tmpShipQuat.set(r.x, r.y, r.z, r.w);
+  tmpForwardWorld.set(0, 0, -1).applyQuaternion(tmpShipQuat);
+  const sp = ship.position;
+  tmpShipPos.set(sp.x, sp.y, sp.z);
+  const cosCone = Math.cos((35 * Math.PI) / 180);
+  const maxRange = 1800;
+  let bestId: number | null = null;
+  let bestScore = -Infinity;
+  for (const e of enemies.enemies) {
+    if (!e.alive) continue;
+    const t = e.body.translation();
+    tmpToEnemy.set(t.x - sp.x, t.y - sp.y, t.z - sp.z);
+    const dist = tmpToEnemy.length();
+    if (dist > maxRange || dist < 1) continue;
+    const dot = tmpToEnemy.divideScalar(dist).dot(tmpForwardWorld);
+    if (dot < cosCone) continue;
+    // Score = forward alignment with mild range falloff.
+    const score = dot - dist / maxRange * 0.25;
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = e.id;
+    }
+  }
+  return bestId;
+}
+
+function applyManifestMods(): void {
+  const mods = computeModsFromParts(manifest.parts);
+  ship.setMods(mods);
+  economy.setMods(mods.cargoCapAdd, mods.miningCoefAdd);
+  energy.setMaxAdd(mods.energyMaxAdd);
+}
+
+async function resolveAndSwapShipVisual(): Promise<void> {
+  try {
+    const built = await resolveShipVisual({
+      variant: ship.variant,
+      manifest,
+    });
+    ship.setVisual(built);
+  } catch (err) {
+    console.warn('[ship] visual resolve failed', err);
+  }
+}
+
+function applyHangarChanges(cost: number): void {
+  if (cost > economy.bank) return;
+  if (cost > 0 && !economy.spendBank(cost)) return;
+  // Mark all working parts as owned.
+  const owned = new Set(save.upgradesOwned);
+  for (const p of hangar.workingParts) owned.add(p.partId);
+  save.upgradesOwned = Array.from(owned);
+  save.bank = economy.bank;
+  manifest = hangar.toManifest('player', 'Custom rig');
+  save.manifest = { id: manifest.id, inline: manifest };
+  persistence.save(save);
+  applyManifestMods();
+  void resolveAndSwapShipVisual();
+  ship.refillHp();
+  energy.refill();
+  showToast(`SHIP RECONFIGURED  ${cost > 0 ? `-${cost} kg` : ''}`, 1800);
+  audio.deposit();
+  closeHangar();
+}
+
+function openHangar(): void {
+  if (hangar.open) return;
+  hangar.open = true;
+  hangar.reset(manifest.parts);
+  ship.setFrozen(true);
+  hangarUI.show();
+}
+
+function closeHangar(): void {
+  if (!hangar.open) return;
+  hangar.open = false;
+  ship.setFrozen(false);
+  hangarUI.hide();
+}
 
 function applyCameraToggle(): void {
   cameraMode = cameraMode === 'chase' ? 'cockpit' : 'chase';
@@ -196,29 +318,36 @@ controls.innerHTML = `
   <div class="row">RT - thrust forward</div>
   <div class="row">LT - brake / reverse</div>
   <div class="row">LB / RB - yaw right / left</div>
-  <div class="row">D-pad - strafe (up/down/left/right)</div>
+  <div class="row">D-pad - strafe</div>
+  <div class="row">A - fire weapon</div>
   <div class="row">B - boost (drains energy)</div>
   <div class="row">X - cycle ship visual</div>
-  <div class="row">Full RT - trigger boost stage</div>
-  <div class="row">Y - toggle chase / cockpit cam</div>
+  <div class="row">Y - hangar toggle (at base)</div>
+  <div class="row">R-stick click - lock / unlock target</div>
+  <div class="row">Back - chase / cockpit cam</div>
+  <div class="row" style="opacity:0.7">In hangar: A enter / confirm · B back · X reset · Start apply · Y close</div>
   <div class="row" style="height:6px"></div>
   <div class="row"><b>Keyboard + mouse</b></div>
-  <div class="row">W / S - thrust forward / brake</div>
+  <div class="row">W / S - thrust / brake</div>
   <div class="row">A / D - roll left / right</div>
   <div class="row">Space / Ctrl - thrust up / down</div>
   <div class="row">Q / E - yaw left / right</div>
   <div class="row">Shift - boost</div>
+  <div class="row">F - fire weapon</div>
+  <div class="row">L - lock / unlock target</div>
+  <div class="row">Y / Tab - hangar (at base)</div>
   <div class="row">Mouse (click to capture) - yaw / pitch</div>
   <div class="row">Arrows - pitch + yaw (alt)</div>
-  <div class="row">C - toggle chase / cockpit cam</div>
+  <div class="row">C - chase / cockpit cam</div>
   <div class="row">V - cycle ship visual</div>
-  <div class="row">G - toggle gamepad debug</div>
-  <div class="row">P - toggle tuning panel</div>
+  <div class="row">G - gamepad debug</div>
+  <div class="row">P - tuning panel</div>
   <div class="row">H - hide / show this panel</div>
 `;
 
 let controlsVisible = true;
-let padDebugVisible = true;
+let padDebugVisible = false;
+padDebug.style.display = 'none';
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyH' && !e.repeat) {
     controlsVisible = !controlsVisible;
@@ -260,8 +389,7 @@ function renderPadDebug(): void {
   if (!any) {
     lines.push(
       `<div style="margin-top:4px;color:#c97a3a">No gamepad detected.</div>` +
-      `<div style="opacity:0.85">Plug it in, then press a button or move a stick. Chrome only exposes a pad after first input.</div>` +
-      `<div style="opacity:0.85">Click the canvas to focus the page first.</div>`,
+      `<div style="opacity:0.85">Plug it in, then press a button or move a stick.</div>`,
     );
   }
   padDebug.innerHTML = lines.join('');
@@ -288,23 +416,47 @@ function isShipCollider(handle: number): boolean {
   return handle === ship.colliderHandle;
 }
 
-function describeOther(handle1: number, handle2: number): { otherHandle: number; kind: ContactKind | undefined } | null {
-  if (isShipCollider(handle1)) return { otherHandle: handle2, kind: registry.lookup(handle2) };
-  if (isShipCollider(handle2)) return { otherHandle: handle1, kind: registry.lookup(handle1) };
-  return null;
+function describeOther(h1: number, h2: number): { handle: number; kind: ContactKind | undefined } {
+  if (isShipCollider(h1)) return { handle: h2, kind: registry.lookup(h2) };
+  if (isShipCollider(h2)) return { handle: h1, kind: registry.lookup(h1) };
+  // Neither is the player ship — return both kinds resolved.
+  return { handle: h1, kind: registry.lookup(h1) };
 }
 
 function tickPhysics(): void {
   const cmd = input.sample();
   if (cmd.toggleCameraMode) applyCameraToggle();
-  if (cmd.cycleShipVisual) {
+  if (cmd.cycleShipVisual && !hangar.open) {
     ship.cycleVariant(1);
     showToast(`SHIP ${ship.variantName}`, 1200);
   }
+  if (cmd.toggleHangar) {
+    if (hangar.open) closeHangar();
+    else if (inBase) openHangar();
+    else showToast('HANGAR REQUIRES DOCKING AT BASE', 1400);
+  }
+
+  if (cmd.toggleLock && !hangar.open) {
+    if (lockedEnemyId !== null) {
+      lockedEnemyId = null;
+      showToast('LOCK RELEASED', 700);
+    } else {
+      const found = pickLockTarget();
+      if (found !== null) {
+        lockedEnemyId = found;
+        showToast('TARGET LOCKED', 900);
+      } else {
+        showToast('NO TARGET IN CONE', 900);
+      }
+    }
+  }
+
+  if (hangar.open) {
+    return; // pause sim while building.
+  }
+
   updateLook(cmd, FIXED_DT);
 
-  // Pre-step ship speed — used for collision threshold so we measure energy
-  // BEFORE physics applies any contact response that might lower it.
   const preStepSpeed = ship.speed;
 
   const p = ship.position;
@@ -312,11 +464,11 @@ function tickPhysics(): void {
   gravitySample = sampleGravityAt(shipPosVec, asteroidField.asteroids);
 
   ship.setAmbientPull(gravitySample.strongestPull);
+  ship.setCargoFraction(economy.cargoFraction);
 
   if (lifecycle.isAlive()) {
     ship.applyAcceleration(gravitySample.acceleration, FIXED_DT);
 
-    // Energy drains only when the boost stage is adding forward thrust.
     const boost = Math.max(0, Math.min(1, cmd.boost));
     const forwardThrust = Math.max(0, -cmd.thrust.z);
     const drainMag = boost * forwardThrust * SHIP_TUNING.BOOST_ENERGY_MULT;
@@ -324,17 +476,25 @@ function tickPhysics(): void {
     ship.setThrustScale(thrustScale);
     ship.applyCommand(cmd, FIXED_DT);
 
-    // Mining: sum proximity contributions.
+    // Player firing.
+    const fired = playerWeapons.tick(FIXED_DT, cmd.fire, ship);
+    if (fired) audio.laser();
+
     economy.tickMining(p, asteroidField.asteroids, FIXED_DT);
   }
 
   physics.step();
   asteroidField.update(FIXED_DT);
   pickups.update(FIXED_DT);
+  weapons.update(FIXED_DT, asteroidField.asteroids);
+  enemies.update(
+    FIXED_DT,
+    p,
+    economy.cargo > 100,
+    ship.linearVelocity,
+    asteroidField.asteroids,
+  );
 
-  // Acceleration magnitude from real velocity delta. EMA-smoothed so the
-  // readout doesn't jitter at 120 Hz. Peak speed tracks the run high-water
-  // mark; reset on respawn.
   const v = ship.linearVelocity;
   const speed = Math.hypot(v.x, v.y, v.z);
   if (speed > peakSpeed) peakSpeed = speed;
@@ -347,18 +507,87 @@ function tickPhysics(): void {
   }
   prevVelocity.set(v.x, v.y, v.z);
   hasPrevVelocity = true;
-  // Build world-space thrust vector from cmd. ship-local axes: x=right,
-  // y=up, z=forward (-Z forward in Three's convention).
+
   const r = ship.body.rotation();
   tmpShipQuat.set(r.x, r.y, r.z, r.w);
   tmpThrustWorld.set(cmd.thrust.x, cmd.thrust.y, cmd.thrust.z).applyQuaternion(tmpShipQuat);
   feedback.update(gravitySample.acceleration, tmpThrustWorld, FIXED_DT, input.readGamepad());
 
-  // Drain collision events. Fires for both solid and sensor pairs.
+  // Field zone tracking.
+  const distFromBase = Math.hypot(p.x - BASE_POS.x, p.y - BASE_POS.y, p.z - BASE_POS.z);
+  const z = zoneFor(distFromBase);
+  if (z !== currentZone) {
+    currentZone = z;
+    if (lifecycle.isAlive()) showToast(`ENTERING ${zoneLabel(z)}`, 1200);
+  }
+  if (-p.z > save.stats.deepestRunZ) {
+    save.stats.deepestRunZ = -p.z;
+  }
+  if (peakSpeed > save.stats.peakSpeed) save.stats.peakSpeed = peakSpeed;
+
+  // Drain collision events. Multiple kinds now: asteroids, base, pickups,
+  // projectiles, enemies.
   let deathThisTick = false;
   let baseTouchedThisTick = false;
   physics.eventQueue.drainCollisionEvents((h1, h2, started) => {
-    const info = describeOther(h1, h2);
+    const k1 = registry.lookup(h1);
+    const k2 = registry.lookup(h2);
+
+    // Projectile contacts: handle regardless of which side is which.
+    const projHandle = (k1?.type === 'projectile') ? h1 : (k2?.type === 'projectile') ? h2 : null;
+    if (projHandle !== null && started) {
+      const proj = (k1?.type === 'projectile') ? k1 : (k2?.type === 'projectile' ? k2 : null);
+      if (proj && proj.type === 'projectile') {
+        const otherKind = (proj === k1) ? k2 : k1;
+        if (!otherKind) {
+          weapons.killById(proj.id);
+          return;
+        }
+        if (otherKind.type === 'asteroid') {
+          weapons.killById(proj.id);
+          return;
+        }
+        if (otherKind.type === 'enemy' && proj.ownerKind === 'player') {
+          // Hit enemy.
+          const projObj = weapons.projectiles.find((x) => x.id === proj.id);
+          const dmg = projObj ? projObj.damage : 8;
+          const result = enemies.applyDamage(otherKind.id, dmg);
+          if (result?.killed) {
+            economy.addBank(ENEMY_TUNING.BANK_REWARD_KG);
+            save.bank = economy.bank;
+            showToast(`+${ENEMY_TUNING.BANK_REWARD_KG} kg salvage`, 1200);
+            audio.destroy();
+          } else {
+            audio.hit();
+          }
+          weapons.killById(proj.id);
+          return;
+        }
+        if (proj.ownerKind === 'enemy' && otherKind.type === undefined) {
+          // Hit player ship (which has no registry entry — its handle is the ship.collider).
+          // handled below in ship-handle branch.
+        }
+        // Hitting the player's ship collider directly:
+        const isShipHandle = (h1 === ship.colliderHandle) || (h2 === ship.colliderHandle);
+        if (isShipHandle && proj.ownerKind === 'enemy') {
+          const projObj = weapons.projectiles.find((x) => x.id === proj.id);
+          const dmg = projObj ? projObj.damage : 14;
+          const killed = ship.applyDamage(dmg);
+          audio.hit();
+          if (killed) {
+            deathThisTick = true;
+          }
+          weapons.killById(proj.id);
+          return;
+        }
+        // Anything else just kills the projectile.
+        weapons.killById(proj.id);
+      }
+      return;
+    }
+
+    // Player-ship contacts (existing logic).
+    const info = isShipCollider(h1) || isShipCollider(h2) ? describeOther(h1, h2) : null;
     if (!info || !info.kind) return;
     const kind = info.kind;
 
@@ -369,7 +598,6 @@ function tickPhysics(): void {
       if (preStepSpeed > LIFECYCLE_TUNING.DEATH_SPEED_THRESHOLD) {
         deathThisTick = true;
       } else {
-        // Graze: damp velocity so we don't keep grinding into the rock.
         const v = ship.body.linvel();
         const damp = LIFECYCLE_TUNING.GRAZE_VELOCITY_DAMP;
         ship.body.setLinvel({ x: v.x * damp, y: v.y * damp, z: v.z * damp }, true);
@@ -383,6 +611,7 @@ function tickPhysics(): void {
       if (got) {
         energy.add(ENERGY_TUNING.PICKUP_AMOUNT);
         showToast(`+ENERGY`, 700);
+        audio.pickupChime();
       }
       return;
     }
@@ -393,6 +622,7 @@ function tickPhysics(): void {
       if (got) {
         const added = economy.addCargo(got.value);
         showToast(`+${Math.round(added)} kg cargo recovered`, 900);
+        audio.pickupChime();
       }
       return;
     }
@@ -400,6 +630,17 @@ function tickPhysics(): void {
     if (kind.type === 'base') {
       if (started) baseTouchedThisTick = true;
       else inBase = false;
+      return;
+    }
+
+    if (kind.type === 'enemy') {
+      if (!started) return;
+      if (!lifecycle.isAlive()) return;
+      if (lifecycle.current === 'invuln') return;
+      // Bumping an enemy ship at speed = damage to both.
+      if (preStepSpeed > 18) {
+        deathThisTick = true;
+      }
       return;
     }
   });
@@ -412,11 +653,27 @@ function tickPhysics(): void {
     inBase = true;
     const deposited = economy.depositAll();
     energy.refill();
+    save.bank = economy.bank;
     if (deposited > 0) {
-      showToast(`DEPOSITED ${Math.round(deposited)} kg  -  BANK ${Math.round(economy.bank)} kg`, 2200);
+      save.stats.totalDeposited += deposited;
+      save.stats.runsCompleted += 1;
+      const elapsed = ((performance.now() - runStartedAt) / 1000).toFixed(0);
+      const earned = Math.round(economy.bank - runStartBank);
+      showToast(`DEPOSITED ${Math.round(deposited)} kg  -  +${earned} kg this run (${elapsed}s)`, 2400);
+      audio.deposit();
+      runStartBank = economy.bank;
+      runStartedAt = performance.now();
     } else {
-      showToast(`ENERGY REFILLED`, 1100);
+      showToast(`ENERGY REFILLED  -  Tab/Back to enter Hangar`, 1800);
     }
+    persistence.save(save);
+  }
+
+  if (baseTouchedThisTick && !lifecycle.isAlive()) {
+    inBase = false;
+  }
+  if (!baseTouchedThisTick && inBase) {
+    // Base leaves are recorded by physics ended event above; nothing to do.
   }
 
   lifecycle.update(FIXED_DT);
@@ -427,9 +684,40 @@ function render(): void {
   dust.update(ship.position);
   trajectory = predictTrajectory(ship.position, ship.linearVelocity, asteroidField.asteroids);
   trajectoryRibbon.update(trajectory);
+  weapons.syncVisuals();
   syncCamera();
   feedback.apply(camera);
+  // Skybox tracks camera so dome + stars feel infinitely distant rather than
+  // a finite outer wall.
+  skybox.position.copy(camera.position);
   composer.render();
+
+  // Reticle + lock target update.
+  let target = null as null | { position: THREE.Vector3; velocity: THREE.Vector3 };
+  if (lockedEnemyId !== null) {
+    const enemy = enemies.enemies.find((e) => e.id === lockedEnemyId);
+    if (!enemy || !enemy.alive) {
+      lockedEnemyId = null;
+      reticle.setLabel('');
+    } else {
+      const t = enemy.body.translation();
+      const v = enemy.body.linvel();
+      tmpEnemyPos.set(t.x, t.y, t.z);
+      tmpEnemyVel.set(v.x, v.y, v.z);
+      target = { position: tmpEnemyPos, velocity: tmpEnemyVel };
+      const sp = ship.position;
+      const dist = Math.hypot(t.x - sp.x, t.y - sp.y, t.z - sp.z);
+      reticle.setLabel(`LOCK · ${Math.round(dist)} m`);
+    }
+  } else {
+    reticle.setLabel('');
+  }
+  const sv = ship.linearVelocity;
+  const sp = ship.position;
+  tmpShipPos.set(sp.x, sp.y, sp.z);
+  tmpShipVel.set(sv.x, sv.y, sv.z);
+  reticle.update(camera, target, tmpShipPos, tmpShipVel, ship.mods.weaponMuzzle);
+  reticle.setVisible(!hangar.open);
 
   const r = ship.body.rotation();
   shipQuat.set(r.x, r.y, r.z, r.w);
@@ -437,7 +725,6 @@ function render(): void {
   minimap.update(asteroidField.asteroids, trajectory, ship.position, shipEuler.y);
   minimap.render(renderer);
 
-  // Drive the fade overlay from lifecycle state.
   fadeOverlay.style.opacity = String(lifecycle.fadeAlpha);
 
   if (padDebugVisible) renderPadDebug();
@@ -463,7 +750,7 @@ function loop(nowMs: number): void {
   if (steps === MAX_STEPS_PER_FRAME) accumulator = 0;
 
   render();
-  audio.update(gravitySample.strongestPull, gravitySample.closestClearance, frameDt);
+  audio.update(gravitySample.strongestPull, gravitySample.closestClearance, frameDt, economy.cargoFraction);
   tickToast(frameDt);
   updateStatus();
   tuningPanel.update({
@@ -492,11 +779,11 @@ function loop(nowMs: number): void {
     const lockHint = input.isPointerLocked() ? '' : '  (click to capture mouse)';
 
     hud.textContent =
-      `Slingshot - Phase 2 run loop\n` +
-      `fps ${fps.toFixed(0)}  dt ${(FIXED_DT * 1000).toFixed(2)}ms  cam ${cameraMode}  ship ${ship.variantName}\n` +
+      `Slingshot — single-player run loop\n` +
+      `fps ${fps.toFixed(0)}  dt ${(FIXED_DT * 1000).toFixed(2)}ms  cam ${cameraMode}  ${zoneLabel(currentZone)}\n` +
       `speed ${speed} m/s  peak ${peakSpeed.toFixed(1)} m/s  accel ${accelMag.toFixed(1)} m/s²\n` +
       `pull ${pull} m/s²  clearance ${clearance}m  shake ${feedbackLevel}%\n` +
-      `${asteroidField.asteroids.length} asteroids  ${padHint}${lockHint}`;
+      `${asteroidField.asteroids.length} asteroids  ${enemies.enemies.filter((e) => e.alive).length} hostiles  ${weapons.projectiles.filter((p) => p.alive).length} projectiles  ${padHint}${lockHint}`;
   }
 
   requestAnimationFrame(loop);
@@ -509,8 +796,9 @@ function updateStatus(): void {
   const ePct = Math.round(energy.fraction * 100);
   const reserve = energy.inReserve;
   const mineRate = economy.mineRate.toFixed(1);
-  const cargoBar = bar(economy.cargo / economy.cargoCap, 14);
+  const cargoBar = bar(economy.cargo / Math.max(1, economy.cargoCap), 14);
   const energyBar = bar(energy.fraction, 14);
+  const hpBar = bar(ship.hpFraction, 10);
 
   const lifecycleHint =
     lifecycle.current === 'dying' ? `<span style="color:#d06424">— SHIP DESTROYED</span>` :
@@ -518,9 +806,14 @@ function updateStatus(): void {
     lifecycle.current === 'invuln' ? `<span style="color:#6dd6c8">— INVULN</span>` :
     '';
 
+  const hpStyle = ship.hpFraction < 0.3 ? 'color:#ff5a4a;font-weight:bold' : '';
+  const baseHint = inBase && !hangar.open ? '<span class="mining">— Tab/Back: HANGAR</span>' : '';
+  const hangarHint = hangar.open ? '<span style="color:#6dd6c8">— HANGAR OPEN</span>' : '';
+
   statusBar.innerHTML = `
+    <div class="line"><b>HULL</b> <span style="${hpStyle}">${hpBar} ${Math.round(ship.hp)} / ${Math.round(ship.hpMax)}</span></div>
     <div class="line"><b>CARGO</b> ${cargoBar} ${cargo} / ${cargoCap} kg ${mineRate !== '0.0' ? `<span class="mining">+${mineRate} kg/s</span>` : ''}</div>
-    <div class="line"><b>BANK</b>  ${bank} kg</div>
+    <div class="line"><b>BANK</b>  ${bank} kg ${baseHint}${hangarHint}</div>
     <div class="line"><b>ENERGY</b> ${energyBar} ${ePct}% ${reserve ? '<span class="reserve">RESERVE</span>' : ''}</div>
     <div class="line">${lifecycleHint}</div>
   `;
@@ -535,3 +828,8 @@ function bar(frac: number, width: number): string {
 
 showToast(`LAUNCH FROM BASE  -  mine asteroids, return to deposit`, 3200);
 requestAnimationFrame(loop);
+
+// Touch a couple imports so unused-warning doesn't fire when only types are used.
+void upgradeApplyCost;
+void manifestPartCost;
+void WEAPON_TUNING;

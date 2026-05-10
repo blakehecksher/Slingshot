@@ -29,11 +29,11 @@ export const PICKUP_TUNING = {
   CARGO_DRIFT_DAMPING: 0.05,
   // Seed area for energy pickups — random uniform inside this box centered
   // at origin. Tune to keep pickups inside the asteroid field.
-  ENERGY_PICKUP_COUNT: 22,
-  ENERGY_SEED_X_RANGE: 2200,
-  ENERGY_SEED_Y_RANGE: 480,
-  ENERGY_SEED_Z_NEAR: -200,
-  ENERGY_SEED_Z_FAR: -3400,
+  ENERGY_PICKUP_COUNT: 44,
+  ENERGY_SEED_X_RANGE: 4400,
+  ENERGY_SEED_Y_RANGE: 1800,
+  ENERGY_SEED_Z_NEAR: 1800,
+  ENERGY_SEED_Z_FAR: -4400,
 };
 
 const ENERGY_GEOM = new THREE.IcosahedronGeometry(PICKUP_TUNING.ENERGY_RADIUS, 0);

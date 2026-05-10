@@ -14,9 +14,13 @@ export interface ShipCommand {
   // Boost intensity [0, 1]. Multiplies forward thrust and energy drain.
   // Gamepad can trigger this with B, or by pulling RT into its top range.
   boost: number;
+  // Hold-fire weapon trigger.
+  fire: boolean;
   // Edge events (true on the frame they fire, then auto-clear).
   toggleCameraMode: boolean;
   cycleShipVisual: boolean;
+  toggleHangar: boolean;
+  toggleLock: boolean;
 }
 
 const DEADZONE = 0.12;
@@ -41,6 +45,8 @@ export class Input {
   // Edge-triggered toggle requests, drained on each sample().
   private pendingCameraToggle = false;
   private pendingShipCycle = false;
+  private pendingHangarToggle = false;
+  private pendingLockToggle = false;
 
   // Previous gamepad button states, for edge detection.
   private prevPadButtons: boolean[] = [];
@@ -50,6 +56,11 @@ export class Input {
       // KeyC toggles camera; consume on first press only (no repeat fire).
       if (e.code === 'KeyC' && !e.repeat) this.pendingCameraToggle = true;
       if (e.code === 'KeyV' && !e.repeat) this.pendingShipCycle = true;
+      if ((e.code === 'Tab' || e.code === 'KeyT' || e.code === 'KeyY') && !e.repeat) {
+        this.pendingHangarToggle = true;
+        if (e.code === 'Tab') e.preventDefault();
+      }
+      if (e.code === 'KeyL' && !e.repeat) this.pendingLockToggle = true;
       this.keys.add(e.code);
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
         e.preventDefault();
@@ -129,8 +140,11 @@ export class Input {
       rotate: { pitch: 0, yaw: 0, roll: 0 },
       look: { yaw: 0, pitch: 0 },
       boost: 0,
+      fire: false,
       toggleCameraMode: false,
       cycleShipVisual: false,
+      toggleHangar: false,
+      toggleLock: false,
     };
 
     const pad = this.readGamepad();
@@ -168,13 +182,27 @@ export class Input {
         pad.buttons[1]?.value ?? (pad.buttons[1]?.pressed ? 1 : 0),
       );
 
-      // Y button: camera mode toggle (edge-triggered).
+      // Y button (b3): hangar open/close (edge-triggered). Inside the
+      // hangar this is read by HangarUI.pollGamepad and ignored here.
       const yPressed = pad.buttons[3]?.pressed ?? false;
-      if (yPressed && !this.prevPadButtons[3]) cmd.toggleCameraMode = true;
+      if (yPressed && !this.prevPadButtons[3]) cmd.toggleHangar = true;
 
-      // X button: cycle ship visual (same behavior as keyboard V).
+      // X button: cycle ship visual.
       const xPressed = pad.buttons[2]?.pressed ?? false;
       if (xPressed && !this.prevPadButtons[2]) cmd.cycleShipVisual = true;
+
+      // A button (b0): fire weapon (held).
+      if (pad.buttons[0]?.pressed) cmd.fire = true;
+
+      // Back/Select (b8): camera toggle.
+      const backPressed = pad.buttons[8]?.pressed ?? false;
+      if (backPressed && !this.prevPadButtons[8]) cmd.toggleCameraMode = true;
+
+      // R3 click (b11 in standard mapping; some pads expose it as b10):
+      // toggle target lock-on.
+      const r3Pressed = (pad.buttons[11]?.pressed ?? false) || (pad.buttons[10]?.pressed ?? false);
+      const r3Prev = (this.prevPadButtons[11] ?? false) || (this.prevPadButtons[10] ?? false);
+      if (r3Pressed && !r3Prev) cmd.toggleLock = true;
 
       // Snapshot button states for next frame.
       this.prevPadButtons = pad.buttons.map((b) => b.pressed);
@@ -206,6 +234,9 @@ export class Input {
     // Shift = boost (keyboard).
     if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) cmd.boost = 1;
 
+    // F = fire weapon (held).
+    if (this.keys.has('KeyF')) cmd.fire = true;
+
     // Mouse aim (pointer-locked) → ship rotation.
     if (this.pointerLocked) {
       cmd.rotate.yaw   += this.mouseDx * this.mouseSensitivity;
@@ -222,6 +253,14 @@ export class Input {
     if (this.pendingShipCycle) {
       cmd.cycleShipVisual = true;
       this.pendingShipCycle = false;
+    }
+    if (this.pendingHangarToggle) {
+      cmd.toggleHangar = true;
+      this.pendingHangarToggle = false;
+    }
+    if (this.pendingLockToggle) {
+      cmd.toggleLock = true;
+      this.pendingLockToggle = false;
     }
 
     cmd.thrust.x = clamp1(cmd.thrust.x);
