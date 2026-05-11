@@ -1,33 +1,29 @@
 import * as THREE from 'three';
-import { AsteroidField } from './game/asteroids';
-import { createBase } from './game/base';
-import { ContactRegistry, type ContactKind } from './game/collision';
-import { Economy, ECONOMY_TUNING } from './game/economy';
-import { Energy, ENERGY_TUNING } from './game/energy';
-import { SHIP_TUNING } from './game/ship';
+import { ASTEROID_TUNING, AsteroidField } from './game/asteroids';
+import { ContactRegistry } from './game/collision';
+import { Energy } from './game/energy';
 import { GravityFeedback } from './game/feedback';
-import { sampleGravityAt } from './game/gravity';
-import { HangarState } from './game/hangar';
+import { GRAVITY_TUNING, sampleGravityAt } from './game/gravity';
 import { Input } from './game/input';
 import { Lifecycle, LIFECYCLE_TUNING } from './game/lifecycle';
-import { PickupSystem } from './game/pickups';
-import { Ship } from './game/ship';
+import { PICKUP_TUNING, PickupSystem } from './game/pickups';
+import { Ship, SHIP_TUNING } from './game/ship';
 import { predictTrajectory, type Trajectory } from './game/trajectory';
+import { computeModsFromParts, defaultManifest } from './game/upgrades';
+import { CheckpointSystem } from './game/racing/checkpoints';
+import { RACE_ASTEROID_DEFAULTS, RACE_COURSES, medalFor, type RaceCourse } from './game/racing/courses';
+import { GhostRecorder, GhostReplay } from './game/racing/ghost';
+import { createLeaderboardProvider, type CourseRecord, type RaceLeaderboardEntry } from './game/racing/leaderboard';
+import { formatDelta, formatRaceTime, RaceManager } from './game/racing/raceManager';
+import { zoneFor, zoneLabel, type FieldZone } from './game/zones';
 import { initPhysics, PhysicsWorld } from './physics/world';
+import { GameAudio } from './audio/audio';
+import { TuningPanel } from './debug/tuningPanel';
 import { SpaceDust } from './render/dust';
 import { Minimap } from './render/minimap';
 import { createRenderRig } from './render/scene';
-import { TrajectoryRibbon } from './render/trajectory';
-import { TuningPanel } from './debug/tuningPanel';
-import { GameAudio } from './audio/audio';
-import { HangarUI } from './render/hangarUI';
-import { computeModsFromParts, defaultManifest, applyCost as upgradeApplyCost, manifestPartCost } from './game/upgrades';
 import { resolveShipVisual } from './render/shipVisual';
-import { WeaponSystem, PlayerWeaponController, WEAPON_TUNING } from './game/weapons';
-import { EnemyManager, ENEMY_TUNING } from './game/enemies';
-import { zoneFor, zoneLabel, type FieldZone } from './game/zones';
-import { ReticleHUD } from './render/reticle';
-import * as persistence from './game/persistence';
+import { TrajectoryRibbon } from './render/trajectory';
 
 const canvas = document.getElementById('app') as HTMLCanvasElement;
 const hud = document.getElementById('hud') as HTMLDivElement;
@@ -39,70 +35,79 @@ const toast = document.getElementById('toast') as HTMLDivElement;
 
 await initPhysics();
 
+const FIXED_DT = 1 / 120;
+const MAX_STEPS_PER_FRAME = 8;
+const BASE_POS = new THREE.Vector3(0, 0, 0);
+
+Object.assign(GRAVITY_TUNING, {
+  G: 0.078,
+  SOFTENING_FACTOR: 0.28,
+  MIN_SOFTENING: 9,
+  DANGER_RANGE: 280,
+  CORE_BOOST_RANGE_FRAC: 1.75,
+  CORE_BOOST_PEAK: 2.65,
+});
+Object.assign(SHIP_TUNING, {
+  SPEED_ASSIST_START: 160,
+  SPEED_ASSIST_FULL: 360,
+  SPEED_ASSIST_DAMPING: 0.42,
+  SPEED_ASSIST_PULL_SUPPRESS_LO: 0.7,
+  SPEED_ASSIST_PULL_SUPPRESS_HI: 7.0,
+});
+PICKUP_TUNING.ENERGY_PICKUP_COUNT = 0;
+
+const leaderboard = createLeaderboardProvider();
+const racingSave = await leaderboard.load();
+let selectedCourseIndex = Math.max(0, RACE_COURSES.findIndex((c) => c.id === racingSave.selectedCourseId));
+if (selectedCourseIndex < 0) selectedCourseIndex = 0;
+let selectedCourse = RACE_COURSES[selectedCourseIndex];
+applyCourseAsteroids(selectedCourse);
+
 const audio = new GameAudio(import.meta.env.BASE_URL);
 void audio.init();
-const unlockAudio = (): void => {
-  audio.unlock();
-};
+const unlockAudio = (): void => audio.unlock();
 window.addEventListener('pointerdown', unlockAudio);
 window.addEventListener('keydown', unlockAudio);
 window.addEventListener('gamepadconnected', unlockAudio);
-
-const FIXED_DT = 1 / 120;
-const MAX_STEPS_PER_FRAME = 8;
 
 const { renderer, composer, scene, camera, skybox } = createRenderRig(canvas);
 const physics = new PhysicsWorld(FIXED_DT);
 const input = new Input(canvas);
 const registry = new ContactRegistry();
-
-// --- Persistence ---
-let save = persistence.load();
-let manifest = save.manifest?.inline ?? defaultManifest();
-
 const ship = new Ship(physics, scene);
 const dust = new SpaceDust(scene);
-const asteroidField = new AsteroidField(scene, physics, registry);
+const asteroidField = new AsteroidField(scene, physics, registry, selectedCourse.seed);
 const trajectoryRibbon = new TrajectoryRibbon(scene);
 const minimap = new Minimap();
 const feedback = new GravityFeedback();
-
-const economy = new Economy();
-economy.setBank(save.bank);
 const energy = new Energy();
 const pickups = new PickupSystem(scene, physics, registry);
-const weapons = new WeaponSystem(scene, physics, registry);
-const enemies = new EnemyManager(scene, physics, registry, weapons, pickups);
-const playerWeapons = new PlayerWeaponController(weapons);
-const reticle = new ReticleHUD();
-let lockedEnemyId: number | null = null;
-const tmpShipPos = new THREE.Vector3();
-const tmpShipVel = new THREE.Vector3();
-const tmpEnemyPos = new THREE.Vector3();
-const tmpEnemyVel = new THREE.Vector3();
-const tmpForwardWorld = new THREE.Vector3();
-const tmpToEnemy = new THREE.Vector3();
+const checkpoints = new CheckpointSystem(scene, physics, registry);
+const race = new RaceManager();
+const ghostRecorder = new GhostRecorder();
+const ghostReplay = new GhostReplay(scene);
 
-const BASE_POS = new THREE.Vector3(0, 0, 0);
-createBase(scene, physics, registry, BASE_POS);
-
-const SPAWN_POS = new THREE.Vector3(0, 0, 180);
-ship.teleport(SPAWN_POS);
-
-pickups.seedEnergyField();
-enemies.seed(asteroidField.asteroids);
-
-// Apply initial mods derived from saved/default manifest.
-applyManifestMods();
+checkpoints.setCourse(selectedCourse);
+ship.teleport(selectedCourse.startPosition);
+ship.setFrozen(true);
+ship.setMods(computeModsFromParts(defaultManifest().parts));
 void resolveAndSwapShipVisual();
 
-const hangar = new HangarState(manifest.parts);
-const hangarUI = new HangarUI({
-  hangar,
-  getBank: () => economy.bank,
-  getOwned: () => save.upgradesOwned,
-  onApply: (cost) => applyHangarChanges(cost),
-  onCancel: () => closeHangar(),
+const lifecycle = new Lifecycle(ship, selectedCourse.startPosition, {
+  onDeath: () => {
+    audio.destroy();
+    ghostRecorder.reset();
+    race.invalidate('SHIP LOST');
+    showToast('RUN INVALIDATED  -  ship lost', 1800);
+    renderCourseSelect('Ship lost. Restart to run the course again.');
+  },
+  onRespawn: () => {
+    energy.refill();
+    ship.refillHp();
+    ship.setFrozen(true);
+    peakSpeed = 0;
+    hasPrevVelocity = false;
+  },
 });
 
 const tuningPanel = new TuningPanel({
@@ -110,305 +115,183 @@ const tuningPanel = new TuningPanel({
   field: asteroidField,
   pickups,
   audio,
-  spawnPos: SPAWN_POS,
+  spawnPos: selectedCourse.startPosition,
   onToast: (msg, dur) => showToast(msg, dur),
 });
-
-let runStartedAt = performance.now();
-let runStartBank = economy.bank;
-
-const lifecycle = new Lifecycle(ship, SPAWN_POS, {
-  onDeath: (deathPos, deathVel) => {
-    const { chunkValueKg, count } = economy.consumeScatter();
-    if (count > 0) {
-      const inherit = ECONOMY_TUNING.SCATTER_DRIFT_INHERIT;
-      const rand = ECONOMY_TUNING.SCATTER_RAND_VEL;
-      const back = deathVel.clone().normalize().multiplyScalar(-1);
-      for (let i = 0; i < count; i++) {
-        const offset = back.clone().multiplyScalar(35 + Math.random() * 20).add(
-          new THREE.Vector3(
-            (Math.random() - 0.5) * 26,
-            (Math.random() - 0.5) * 26,
-            (Math.random() - 0.5) * 26,
-          ),
-        );
-        const vel = new THREE.Vector3(
-          deathVel.x * inherit + (Math.random() - 0.5) * rand,
-          deathVel.y * inherit + (Math.random() - 0.5) * rand,
-          deathVel.z * inherit + (Math.random() - 0.5) * rand,
-        );
-        pickups.spawnCargo(deathPos.clone().add(offset), vel, chunkValueKg);
-      }
-    }
-    save.stats.shipsLost += 1;
-    persistence.save(save);
-    audio.destroy();
-    showToast(`SHIP LOST  cargo scattered: ${count} chunks`, 1800);
-  },
-  onRespawn: () => {
-    energy.refill();
-    ship.refillHp();
-    peakSpeed = 0;
-    hasPrevVelocity = false;
-  },
-});
+tuningPanel.toggle();
 
 type CameraMode = 'chase' | 'cockpit';
 let cameraMode: CameraMode = 'chase';
-
 const CHASE_DISTANCE = 9;
 const CHASE_HEIGHT = 2.5;
 const LOOK_RATE = 1.6;
 const LOOK_RECENTER = 4.0;
 const LOOK_PITCH_LIMIT = Math.PI / 2 - 0.05;
+const REMOTE_ERROR_MAX = 180;
 
 let lookYaw = 0;
 let lookPitch = 0;
+let trajectory: Trajectory = predictTrajectory(ship.position, ship.linearVelocity, asteroidField.asteroids);
+let gravitySample = sampleGravityAt(selectedCourse.startPosition, asteroidField.asteroids);
+let currentZone: FieldZone = 'open';
+let peakSpeed = 0;
+let accelMag = 0;
+let hasPrevVelocity = false;
+let controlsVisible = true;
+let padDebugVisible = false;
+let finishMessage = '';
+let leaderboardRefreshSeq = 0;
 
 const shipQuat = new THREE.Quaternion();
+const tmpQuat = new THREE.Quaternion();
 const lookQuat = new THREE.Quaternion();
-const camOffset = new THREE.Vector3();
 const lookEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const shipEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+const camOffset = new THREE.Vector3();
 const shipPosVec = new THREE.Vector3();
 const tmpDeathPos = new THREE.Vector3();
 const tmpDeathVel = new THREE.Vector3();
 const tmpThrustWorld = new THREE.Vector3();
-const tmpShipQuat = new THREE.Quaternion();
 const prevVelocity = new THREE.Vector3();
-let hasPrevVelocity = false;
-let accelMag = 0;
-let peakSpeed = 0;
-let currentZone: FieldZone = 'open';
+const ringTargetWorld = new THREE.Vector3();
+const ringTargetDir = new THREE.Vector3();
+const ringTargetProj = new THREE.Vector3();
+const cameraRight = new THREE.Vector3();
+const cameraUp = new THREE.Vector3();
+const cameraForward = new THREE.Vector3();
 
-let trajectory: Trajectory = predictTrajectory(ship.position, ship.linearVelocity, asteroidField.asteroids);
-let gravitySample = sampleGravityAt(shipPosVec.copy(SPAWN_POS), asteroidField.asteroids);
+const coursePanel = document.createElement('div');
+coursePanel.id = 'course-select';
+document.body.appendChild(coursePanel);
+const ringTracker = createRingTracker();
+injectRaceStyles();
+renderControls();
+prepareCourse(selectedCourse);
+renderCourseSelect('Choose a league course, then press Enter or Start Race.');
 
-let inBase = false;
-
-/** Find best lock target: alive enemy in front cone, biased to dot product. */
-function pickLockTarget(): number | null {
-  const r = ship.body.rotation();
-  tmpShipQuat.set(r.x, r.y, r.z, r.w);
-  tmpForwardWorld.set(0, 0, -1).applyQuaternion(tmpShipQuat);
-  const sp = ship.position;
-  tmpShipPos.set(sp.x, sp.y, sp.z);
-  const cosCone = Math.cos((35 * Math.PI) / 180);
-  const maxRange = 1800;
-  let bestId: number | null = null;
-  let bestScore = -Infinity;
-  for (const e of enemies.enemies) {
-    if (!e.alive) continue;
-    const t = e.body.translation();
-    tmpToEnemy.set(t.x - sp.x, t.y - sp.y, t.z - sp.z);
-    const dist = tmpToEnemy.length();
-    if (dist > maxRange || dist < 1) continue;
-    const dot = tmpToEnemy.divideScalar(dist).dot(tmpForwardWorld);
-    if (dot < cosCone) continue;
-    // Score = forward alignment with mild range falloff.
-    const score = dot - dist / maxRange * 0.25;
-    if (score > bestScore) {
-      bestScore = score;
-      bestId = e.id;
-    }
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyH' && !e.repeat) {
+    controlsVisible = !controlsVisible;
+    controls.style.display = controlsVisible ? '' : 'none';
   }
-  return bestId;
-}
+  if (e.code === 'KeyG' && !e.repeat) {
+    padDebugVisible = !padDebugVisible;
+    padDebug.style.display = padDebugVisible ? '' : 'none';
+  }
+});
 
-function applyManifestMods(): void {
-  const mods = computeModsFromParts(manifest.parts);
-  ship.setMods(mods);
-  economy.setMods(mods.cargoCapAdd, mods.miningCoefAdd);
-  energy.setMaxAdd(mods.energyMaxAdd);
+function applyCourseAsteroids(course: RaceCourse): void {
+  Object.assign(ASTEROID_TUNING, RACE_ASTEROID_DEFAULTS, course.asteroidTuning);
 }
 
 async function resolveAndSwapShipVisual(): Promise<void> {
   try {
-    const built = await resolveShipVisual({
-      variant: ship.variant,
-      manifest,
-    });
+    const built = await resolveShipVisual({ variant: ship.variant, manifest: defaultManifest() });
     ship.setVisual(built);
   } catch (err) {
     console.warn('[ship] visual resolve failed', err);
   }
 }
 
-function applyHangarChanges(cost: number): void {
-  if (cost > economy.bank) return;
-  if (cost > 0 && !economy.spendBank(cost)) return;
-  // Mark all working parts as owned.
-  const owned = new Set(save.upgradesOwned);
-  for (const p of hangar.workingParts) owned.add(p.partId);
-  save.upgradesOwned = Array.from(owned);
-  save.bank = economy.bank;
-  manifest = hangar.toManifest('player', 'Custom rig');
-  save.manifest = { id: manifest.id, inline: manifest };
-  persistence.save(save);
-  applyManifestMods();
-  void resolveAndSwapShipVisual();
+function prepareCourse(course: RaceCourse): void {
+  selectedCourse = course;
+  applyCourseAsteroids(course);
+  asteroidField.regenerate(course.seed);
+  checkpoints.setCourse(course);
+  const refreshSeq = ++leaderboardRefreshSeq;
+  void leaderboard.setSelectedCourse(course.id).then(() => {
+    if (refreshSeq !== leaderboardRefreshSeq || selectedCourse.id !== course.id) return;
+    ghostReplay.setRun(leaderboard.getRecord(course.id)?.bestGhost ?? null);
+    if (race.state !== 'racing' && race.state !== 'countdown') {
+      renderCourseSelect(finishMessage || 'Course loaded. Press Enter or Start Race.');
+    }
+  });
+  lifecycle.setRespawnPos(course.startPosition);
+  ship.teleport(course.startPosition);
+  ship.setFrozen(true);
   ship.refillHp();
   energy.refill();
-  showToast(`SHIP RECONFIGURED  ${cost > 0 ? `-${cost} kg` : ''}`, 1800);
-  audio.deposit();
-  closeHangar();
+  peakSpeed = 0;
+  accelMag = 0;
+  hasPrevVelocity = false;
+  currentZone = 'open';
+  gravitySample = sampleGravityAt(course.startPosition, asteroidField.asteroids);
+  ghostReplay.setRun(leaderboard.getRecord(course.id)?.bestGhost ?? null);
 }
 
-function openHangar(): void {
-  if (hangar.open) return;
-  hangar.open = true;
-  hangar.reset(manifest.parts);
+function selectCourse(index: number): void {
+  if (race.state === 'racing' || race.state === 'countdown') return;
+  selectedCourseIndex = (index + RACE_COURSES.length) % RACE_COURSES.length;
+  prepareCourse(RACE_COURSES[selectedCourseIndex]);
+  race.returnToSelect();
+  finishMessage = '';
+  renderCourseSelect('Course loaded. Press Enter or Start Race.');
+}
+
+function startRace(): void {
+  prepareCourse(selectedCourse);
+  race.start(selectedCourse);
+  ghostRecorder.reset();
+  ghostReplay.setRun(leaderboard.getRecord(selectedCourse.id)?.bestGhost ?? null);
+  coursePanel.style.display = 'none';
+  showToast('STAND BY', 900);
+}
+
+async function finishRace(): Promise<void> {
+  const finish = race.finish;
+  if (!finish) return;
   ship.setFrozen(true);
-  hangarUI.show();
-}
-
-function closeHangar(): void {
-  if (!hangar.open) return;
-  hangar.open = false;
-  ship.setFrozen(false);
-  hangarUI.hide();
+  const run = ghostRecorder.complete(finish.courseId, finish.timeSec, finish.splits, ship, race.nextCheckpoint);
+  const result = await leaderboard.submitRun(run);
+  const medal = medalFor(finish.timeSec, selectedCourse.medals).toUpperCase();
+  const best = result.record.bestTimeSec;
+  const delta = finish.timeSec - best;
+  const remote = result.isGlobalBest
+    ? ' - global best'
+    : result.remoteError
+      ? ` - local saved, remote failed: ${shortError(result.remoteError)}`
+      : '';
+  finishMessage = `${medal} finish ${formatRaceTime(finish.timeSec)}${result.isPersonalBest ? ' - personal best' : ` (${formatDelta(delta)} vs best)`}${remote}`;
+  ghostReplay.setRun(result.record.bestGhost);
+  showToast(finishMessage, 3000);
+  renderCourseSelect(finishMessage, result.record);
 }
 
 function applyCameraToggle(): void {
   cameraMode = cameraMode === 'chase' ? 'cockpit' : 'chase';
-  ship.mesh.visible = cameraMode === 'chase';
+  showToast(`CAMERA ${cameraMode.toUpperCase()}`, 800);
 }
 
-ship.mesh.visible = true;
-
 function updateLook(cmd: { look: { yaw: number; pitch: number } }, dt: number): void {
-  if (cmd.look.yaw !== 0 || cmd.look.pitch !== 0) {
-    lookYaw += cmd.look.yaw * LOOK_RATE * dt;
-    lookPitch += cmd.look.pitch * LOOK_RATE * dt;
-  } else {
-    const k = Math.exp(-LOOK_RECENTER * dt);
-    lookYaw *= k;
-    lookPitch *= k;
+  lookYaw += cmd.look.yaw * LOOK_RATE * dt;
+  lookPitch += cmd.look.pitch * LOOK_RATE * dt;
+  lookPitch = Math.max(-LOOK_PITCH_LIMIT, Math.min(LOOK_PITCH_LIMIT, lookPitch));
+  const hasLook = Math.abs(cmd.look.yaw) + Math.abs(cmd.look.pitch) > 0.02;
+  if (!hasLook) {
+    const k = 1 - Math.exp(-LOOK_RECENTER * dt);
+    lookYaw += (0 - lookYaw) * k;
+    lookPitch += (0 - lookPitch) * k;
   }
-  if (lookPitch > LOOK_PITCH_LIMIT) lookPitch = LOOK_PITCH_LIMIT;
-  if (lookPitch < -LOOK_PITCH_LIMIT) lookPitch = -LOOK_PITCH_LIMIT;
 }
 
 function syncCamera(): void {
-  const t = ship.body.translation();
+  const p = ship.position;
   const r = ship.body.rotation();
   shipQuat.set(r.x, r.y, r.z, r.w);
-
-  lookEuler.set(lookPitch, lookYaw, 0, 'YXZ');
+  lookEuler.set(lookPitch, lookYaw, 0);
   lookQuat.setFromEuler(lookEuler);
+  tmpQuat.copy(shipQuat).multiply(lookQuat);
 
   if (cameraMode === 'cockpit') {
-    camera.position.set(t.x, t.y, t.z);
+    const cockpitOffset = new THREE.Vector3(0, 0.55, -0.55).applyQuaternion(shipQuat);
+    camera.position.set(p.x + cockpitOffset.x, p.y + cockpitOffset.y, p.z + cockpitOffset.z);
+    camera.quaternion.copy(tmpQuat);
+  } else {
+    camOffset.set(0, CHASE_HEIGHT, CHASE_DISTANCE);
+    camOffset.applyQuaternion(lookQuat);
+    camOffset.applyQuaternion(shipQuat);
+    camera.position.set(p.x + camOffset.x, p.y + camOffset.y, p.z + camOffset.z);
     camera.quaternion.copy(shipQuat).multiply(lookQuat);
-    return;
-  }
-
-  camOffset.set(0, CHASE_HEIGHT, CHASE_DISTANCE);
-  camOffset.applyQuaternion(lookQuat);
-  camOffset.applyQuaternion(shipQuat);
-  camera.position.set(t.x + camOffset.x, t.y + camOffset.y, t.z + camOffset.z);
-  camera.quaternion.copy(shipQuat).multiply(lookQuat);
-}
-
-controls.innerHTML = `
-  <h3>Controls</h3>
-  <div class="row"><b>Xbox controller</b></div>
-  <div class="row">L stick - roll / pitch</div>
-  <div class="row">R stick - look around</div>
-  <div class="row">RT - thrust forward</div>
-  <div class="row">LT - brake / reverse</div>
-  <div class="row">LB / RB - yaw right / left</div>
-  <div class="row">D-pad - strafe</div>
-  <div class="row">A - fire weapon</div>
-  <div class="row">B - boost (drains energy)</div>
-  <div class="row">X - cycle ship visual</div>
-  <div class="row">Y - hangar toggle (at base)</div>
-  <div class="row">R-stick click - lock / unlock target</div>
-  <div class="row">Back - chase / cockpit cam</div>
-  <div class="row" style="opacity:0.7">In hangar: A enter / confirm · B back · X reset · Start apply · Y close</div>
-  <div class="row" style="height:6px"></div>
-  <div class="row"><b>Keyboard + mouse</b></div>
-  <div class="row">W / S - thrust / brake</div>
-  <div class="row">A / D - roll left / right</div>
-  <div class="row">Space / Ctrl - thrust up / down</div>
-  <div class="row">Q / E - yaw left / right</div>
-  <div class="row">Shift - boost</div>
-  <div class="row">F - fire weapon</div>
-  <div class="row">L - lock / unlock target</div>
-  <div class="row">Y / Tab - hangar (at base)</div>
-  <div class="row">Mouse (click to capture) - yaw / pitch</div>
-  <div class="row">Arrows - pitch + yaw (alt)</div>
-  <div class="row">C - chase / cockpit cam</div>
-  <div class="row">V - cycle ship visual</div>
-  <div class="row">G - gamepad debug</div>
-  <div class="row">P - tuning panel</div>
-  <div class="row">H - hide / show this panel</div>
-`;
-
-let controlsVisible = true;
-let padDebugVisible = false;
-padDebug.style.display = 'none';
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyH' && !e.repeat) {
-    controlsVisible = !controlsVisible;
-    controls.style.display = controlsVisible ? 'block' : 'none';
-  }
-  if (e.code === 'KeyG' && !e.repeat) {
-    padDebugVisible = !padDebugVisible;
-    padDebug.style.display = padDebugVisible ? 'block' : 'none';
-  }
-});
-
-function fmt(n: number): string {
-  const s = n.toFixed(2);
-  return n >= 0 ? ` ${s}` : s;
-}
-
-function renderPadDebug(): void {
-  const pads = navigator.getGamepads?.() ?? [];
-  let any = false;
-  const lines: string[] = [];
-  lines.push(`<b>Gamepad debug</b>  <span style="opacity:0.6">(G to toggle)</span>`);
-
-  for (const p of pads) {
-    if (!p) continue;
-    any = true;
-    lines.push(
-      `<div style="margin-top:4px"><b>#${p.index}</b> ${p.id}</div>` +
-      `<div>mapping: ${p.mapping || '(non-standard)'}  connected: ${p.connected}</div>`,
-    );
-    const axes = p.axes.map((v, i) => `a${i}:${fmt(v)}`).join('  ');
-    lines.push(`<div>${axes}</div>`);
-    const btns = p.buttons.map((b, i) => {
-      const style = b.pressed ? 'color:#eae0c8;font-weight:bold' : 'opacity:0.35';
-      return `<span style="${style}">b${i}:${b.value.toFixed(2)}</span>`;
-    }).join(' ');
-    lines.push(`<div style="margin-top:2px">${btns}</div>`);
-  }
-
-  if (!any) {
-    lines.push(
-      `<div style="margin-top:4px;color:#c97a3a">No gamepad detected.</div>` +
-      `<div style="opacity:0.85">Plug it in, then press a button or move a stick.</div>`,
-    );
-  }
-  padDebug.innerHTML = lines.join('');
-}
-
-let toastTimer = 0;
-function showToast(text: string, durationMs: number): void {
-  toast.textContent = text;
-  toast.style.opacity = '1';
-  toastTimer = durationMs;
-}
-function tickToast(dt: number): void {
-  if (toastTimer <= 0) {
-    toast.style.opacity = '0';
-    return;
-  }
-  toastTimer -= dt * 1000;
-  if (toastTimer < 300) {
-    toast.style.opacity = String(Math.max(0, toastTimer / 300));
   }
 }
 
@@ -416,84 +299,54 @@ function isShipCollider(handle: number): boolean {
   return handle === ship.colliderHandle;
 }
 
-function describeOther(h1: number, h2: number): { handle: number; kind: ContactKind | undefined } {
-  if (isShipCollider(h1)) return { handle: h2, kind: registry.lookup(h2) };
-  if (isShipCollider(h2)) return { handle: h1, kind: registry.lookup(h1) };
-  // Neither is the player ship — return both kinds resolved.
-  return { handle: h1, kind: registry.lookup(h1) };
-}
-
 function tickPhysics(): void {
   const cmd = input.sample();
   if (cmd.toggleCameraMode) applyCameraToggle();
-  if (cmd.cycleShipVisual && !hangar.open) {
+  if (cmd.cycleShipVisual && race.state !== 'racing' && race.state !== 'countdown') {
     ship.cycleVariant(1);
+    void resolveAndSwapShipVisual();
     showToast(`SHIP ${ship.variantName}`, 1200);
   }
-  if (cmd.toggleHangar) {
-    if (hangar.open) closeHangar();
-    else if (inBase) openHangar();
-    else showToast('HANGAR REQUIRES DOCKING AT BASE', 1400);
+  if (cmd.courseDelta !== 0 && race.state !== 'racing' && race.state !== 'countdown') {
+    selectCourse(selectedCourseIndex + Math.sign(cmd.courseDelta));
+  }
+  if (cmd.courseIndex !== null) selectCourse(cmd.courseIndex);
+  if (cmd.startRace && (race.state === 'select' || race.state === 'finished' || race.state === 'invalid')) startRace();
+  if (cmd.restartRace) startRace();
+
+  const raceEvent = race.update(FIXED_DT);
+  if (raceEvent.started) {
+    ship.setFrozen(false);
+    showToast('GO', 700);
   }
 
-  if (cmd.toggleLock && !hangar.open) {
-    if (lockedEnemyId !== null) {
-      lockedEnemyId = null;
-      showToast('LOCK RELEASED', 700);
-    } else {
-      const found = pickLockTarget();
-      if (found !== null) {
-        lockedEnemyId = found;
-        showToast('TARGET LOCKED', 900);
-      } else {
-        showToast('NO TARGET IN CONE', 900);
-      }
-    }
-  }
-
-  if (hangar.open) {
-    return; // pause sim while building.
+  if (race.state !== 'racing') {
+    checkpoints.update(FIXED_DT, race.nextCheckpoint);
+    lifecycle.update(FIXED_DT);
+    return;
   }
 
   updateLook(cmd, FIXED_DT);
-
   const preStepSpeed = ship.speed;
-
   const p = ship.position;
   shipPosVec.set(p.x, p.y, p.z);
   gravitySample = sampleGravityAt(shipPosVec, asteroidField.asteroids);
-
   ship.setAmbientPull(gravitySample.strongestPull);
-  ship.setCargoFraction(economy.cargoFraction);
+  ship.setCargoFraction(0);
+  ship.applyAcceleration(gravitySample.acceleration, FIXED_DT);
 
-  if (lifecycle.isAlive()) {
-    ship.applyAcceleration(gravitySample.acceleration, FIXED_DT);
-
-    const boost = Math.max(0, Math.min(1, cmd.boost));
-    const forwardThrust = Math.max(0, -cmd.thrust.z);
-    const drainMag = boost * forwardThrust * SHIP_TUNING.BOOST_ENERGY_MULT;
-    const thrustScale = energy.tick(drainMag, FIXED_DT);
-    ship.setThrustScale(thrustScale);
-    ship.applyCommand(cmd, FIXED_DT);
-
-    // Player firing.
-    const fired = playerWeapons.tick(FIXED_DT, cmd.fire, ship);
-    if (fired) audio.laser();
-
-    economy.tickMining(p, asteroidField.asteroids, FIXED_DT);
-  }
+  const boost = Math.max(0, Math.min(1, cmd.boost));
+  const forwardThrust = Math.max(0, -cmd.thrust.z);
+  const drainMag = boost * forwardThrust * SHIP_TUNING.BOOST_ENERGY_MULT;
+  const thrustScale = energy.tick(drainMag, FIXED_DT);
+  ship.setThrustScale(thrustScale);
+  ship.applyCommand(cmd, FIXED_DT);
 
   physics.step();
   asteroidField.update(FIXED_DT);
-  pickups.update(FIXED_DT);
-  weapons.update(FIXED_DT, asteroidField.asteroids);
-  enemies.update(
-    FIXED_DT,
-    p,
-    economy.cargo > 100,
-    ship.linearVelocity,
-    asteroidField.asteroids,
-  );
+  checkpoints.update(FIXED_DT, race.nextCheckpoint);
+  ghostRecorder.update(race.elapsedSec, ship, race.nextCheckpoint);
+  ghostReplay.update(race.elapsedSec);
 
   const v = ship.linearVelocity;
   const speed = Math.hypot(v.x, v.y, v.z);
@@ -502,146 +355,45 @@ function tickPhysics(): void {
     const ax = (v.x - prevVelocity.x) / FIXED_DT;
     const ay = (v.y - prevVelocity.y) / FIXED_DT;
     const az = (v.z - prevVelocity.z) / FIXED_DT;
-    const a = Math.hypot(ax, ay, az);
-    accelMag += (a - accelMag) * 0.18;
+    accelMag += (Math.hypot(ax, ay, az) - accelMag) * 0.18;
   }
   prevVelocity.set(v.x, v.y, v.z);
   hasPrevVelocity = true;
 
   const r = ship.body.rotation();
-  tmpShipQuat.set(r.x, r.y, r.z, r.w);
-  tmpThrustWorld.set(cmd.thrust.x, cmd.thrust.y, cmd.thrust.z).applyQuaternion(tmpShipQuat);
+  tmpQuat.set(r.x, r.y, r.z, r.w);
+  tmpThrustWorld.set(cmd.thrust.x, cmd.thrust.y, cmd.thrust.z).applyQuaternion(tmpQuat);
   feedback.update(gravitySample.acceleration, tmpThrustWorld, FIXED_DT, input.readGamepad());
 
-  // Field zone tracking.
   const distFromBase = Math.hypot(p.x - BASE_POS.x, p.y - BASE_POS.y, p.z - BASE_POS.z);
-  const z = zoneFor(distFromBase);
-  if (z !== currentZone) {
-    currentZone = z;
-    if (lifecycle.isAlive()) showToast(`ENTERING ${zoneLabel(z)}`, 1200);
-  }
-  if (-p.z > save.stats.deepestRunZ) {
-    save.stats.deepestRunZ = -p.z;
-  }
-  if (peakSpeed > save.stats.peakSpeed) save.stats.peakSpeed = peakSpeed;
+  currentZone = zoneFor(distFromBase);
 
-  // Drain collision events. Multiple kinds now: asteroids, base, pickups,
-  // projectiles, enemies.
   let deathThisTick = false;
-  let baseTouchedThisTick = false;
   physics.eventQueue.drainCollisionEvents((h1, h2, started) => {
+    if (!started) return;
     const k1 = registry.lookup(h1);
     const k2 = registry.lookup(h2);
-
-    // Projectile contacts: handle regardless of which side is which.
-    const projHandle = (k1?.type === 'projectile') ? h1 : (k2?.type === 'projectile') ? h2 : null;
-    if (projHandle !== null && started) {
-      const proj = (k1?.type === 'projectile') ? k1 : (k2?.type === 'projectile' ? k2 : null);
-      if (proj && proj.type === 'projectile') {
-        const otherKind = (proj === k1) ? k2 : k1;
-        if (!otherKind) {
-          weapons.killById(proj.id);
-          return;
-        }
-        if (otherKind.type === 'asteroid') {
-          weapons.killById(proj.id);
-          return;
-        }
-        if (otherKind.type === 'enemy' && proj.ownerKind === 'player') {
-          // Hit enemy.
-          const projObj = weapons.projectiles.find((x) => x.id === proj.id);
-          const dmg = projObj ? projObj.damage : 8;
-          const result = enemies.applyDamage(otherKind.id, dmg);
-          if (result?.killed) {
-            economy.addBank(ENEMY_TUNING.BANK_REWARD_KG);
-            save.bank = economy.bank;
-            showToast(`+${ENEMY_TUNING.BANK_REWARD_KG} kg salvage`, 1200);
-            audio.destroy();
-          } else {
-            audio.hit();
-          }
-          weapons.killById(proj.id);
-          return;
-        }
-        if (proj.ownerKind === 'enemy' && otherKind.type === undefined) {
-          // Hit player ship (which has no registry entry — its handle is the ship.collider).
-          // handled below in ship-handle branch.
-        }
-        // Hitting the player's ship collider directly:
-        const isShipHandle = (h1 === ship.colliderHandle) || (h2 === ship.colliderHandle);
-        if (isShipHandle && proj.ownerKind === 'enemy') {
-          const projObj = weapons.projectiles.find((x) => x.id === proj.id);
-          const dmg = projObj ? projObj.damage : 14;
-          const killed = ship.applyDamage(dmg);
-          audio.hit();
-          if (killed) {
-            deathThisTick = true;
-          }
-          weapons.killById(proj.id);
-          return;
-        }
-        // Anything else just kills the projectile.
-        weapons.killById(proj.id);
+    const checkpoint = k1?.type === 'checkpoint' ? k1 : k2?.type === 'checkpoint' ? k2 : null;
+    if (checkpoint) {
+      const accepted = race.checkpoint(checkpoint.index);
+      if (accepted.accepted) {
+        const gate = selectedCourse.gates[checkpoint.index];
+        audio.pickupChime();
+        if (accepted.finished) void finishRace();
+        else showToast(`${checkpoint.index + 1}/${selectedCourse.gates.length}  ${gate.label}`, 1000);
       }
       return;
     }
 
-    // Player-ship contacts (existing logic).
-    const info = isShipCollider(h1) || isShipCollider(h2) ? describeOther(h1, h2) : null;
-    if (!info || !info.kind) return;
-    const kind = info.kind;
-
-    if (kind.type === 'asteroid') {
-      if (!started) return;
-      if (!lifecycle.isAlive()) return;
-      if (lifecycle.current === 'invuln') return;
+    const other = isShipCollider(h1) ? k2 : isShipCollider(h2) ? k1 : null;
+    if (other?.type === 'asteroid' && lifecycle.isAlive()) {
       if (preStepSpeed > LIFECYCLE_TUNING.DEATH_SPEED_THRESHOLD) {
         deathThisTick = true;
       } else {
-        const v = ship.body.linvel();
+        const lin = ship.body.linvel();
         const damp = LIFECYCLE_TUNING.GRAZE_VELOCITY_DAMP;
-        ship.body.setLinvel({ x: v.x * damp, y: v.y * damp, z: v.z * damp }, true);
+        ship.body.setLinvel({ x: lin.x * damp, y: lin.y * damp, z: lin.z * damp }, true);
       }
-      return;
-    }
-
-    if (kind.type === 'pickup-energy') {
-      if (!started) return;
-      const got = pickups.collect(kind.id);
-      if (got) {
-        energy.add(ENERGY_TUNING.PICKUP_AMOUNT);
-        showToast(`+ENERGY`, 700);
-        audio.pickupChime();
-      }
-      return;
-    }
-
-    if (kind.type === 'pickup-cargo') {
-      if (!started) return;
-      const got = pickups.collect(kind.id);
-      if (got) {
-        const added = economy.addCargo(got.value);
-        showToast(`+${Math.round(added)} kg cargo recovered`, 900);
-        audio.pickupChime();
-      }
-      return;
-    }
-
-    if (kind.type === 'base') {
-      if (started) baseTouchedThisTick = true;
-      else inBase = false;
-      return;
-    }
-
-    if (kind.type === 'enemy') {
-      if (!started) return;
-      if (!lifecycle.isAlive()) return;
-      if (lifecycle.current === 'invuln') return;
-      // Bumping an enemy ship at speed = damage to both.
-      if (preStepSpeed > 18) {
-        deathThisTick = true;
-      }
-      return;
     }
   });
 
@@ -649,31 +401,6 @@ function tickPhysics(): void {
     tmpDeathPos.set(ship.position.x, ship.position.y, ship.position.z);
     tmpDeathVel.set(ship.linearVelocity.x, ship.linearVelocity.y, ship.linearVelocity.z);
     lifecycle.die(tmpDeathPos, tmpDeathVel);
-  } else if (baseTouchedThisTick && lifecycle.isAlive() && !inBase) {
-    inBase = true;
-    const deposited = economy.depositAll();
-    energy.refill();
-    save.bank = economy.bank;
-    if (deposited > 0) {
-      save.stats.totalDeposited += deposited;
-      save.stats.runsCompleted += 1;
-      const elapsed = ((performance.now() - runStartedAt) / 1000).toFixed(0);
-      const earned = Math.round(economy.bank - runStartBank);
-      showToast(`DEPOSITED ${Math.round(deposited)} kg  -  +${earned} kg this run (${elapsed}s)`, 2400);
-      audio.deposit();
-      runStartBank = economy.bank;
-      runStartedAt = performance.now();
-    } else {
-      showToast(`ENERGY REFILLED  -  Tab/Back to enter Hangar`, 1800);
-    }
-    persistence.save(save);
-  }
-
-  if (baseTouchedThisTick && !lifecycle.isAlive()) {
-    inBase = false;
-  }
-  if (!baseTouchedThisTick && inBase) {
-    // Base leaves are recorded by physics ended event above; nothing to do.
   }
 
   lifecycle.update(FIXED_DT);
@@ -684,49 +411,22 @@ function render(): void {
   dust.update(ship.position);
   trajectory = predictTrajectory(ship.position, ship.linearVelocity, asteroidField.asteroids);
   trajectoryRibbon.update(trajectory);
-  weapons.syncVisuals();
   syncCamera();
+  updateRingTracker();
   feedback.apply(camera);
-  // Skybox tracks camera so dome + stars feel infinitely distant rather than
-  // a finite outer wall.
   skybox.position.copy(camera.position);
   composer.render();
-
-  // Reticle + lock target update.
-  let target = null as null | { position: THREE.Vector3; velocity: THREE.Vector3 };
-  if (lockedEnemyId !== null) {
-    const enemy = enemies.enemies.find((e) => e.id === lockedEnemyId);
-    if (!enemy || !enemy.alive) {
-      lockedEnemyId = null;
-      reticle.setLabel('');
-    } else {
-      const t = enemy.body.translation();
-      const v = enemy.body.linvel();
-      tmpEnemyPos.set(t.x, t.y, t.z);
-      tmpEnemyVel.set(v.x, v.y, v.z);
-      target = { position: tmpEnemyPos, velocity: tmpEnemyVel };
-      const sp = ship.position;
-      const dist = Math.hypot(t.x - sp.x, t.y - sp.y, t.z - sp.z);
-      reticle.setLabel(`LOCK · ${Math.round(dist)} m`);
-    }
-  } else {
-    reticle.setLabel('');
-  }
-  const sv = ship.linearVelocity;
-  const sp = ship.position;
-  tmpShipPos.set(sp.x, sp.y, sp.z);
-  tmpShipVel.set(sv.x, sv.y, sv.z);
-  reticle.update(camera, target, tmpShipPos, tmpShipVel, ship.mods.weaponMuzzle);
-  reticle.setVisible(!hangar.open);
 
   const r = ship.body.rotation();
   shipQuat.set(r.x, r.y, r.z, r.w);
   shipEuler.setFromQuaternion(shipQuat, 'YXZ');
-  minimap.update(asteroidField.asteroids, trajectory, ship.position, shipEuler.y);
+  minimap.update(asteroidField.asteroids, trajectory, ship.position, shipEuler.y, {
+    nextCheckpoint: checkpoints.targetPosition(race.nextCheckpoint),
+    finish: selectedCourse.gates[selectedCourse.gates.length - 1]?.position ?? null,
+    ghost: ghostReplay.position,
+  });
   minimap.render(renderer);
-
   fadeOverlay.style.opacity = String(lifecycle.fadeAlpha);
-
   if (padDebugVisible) renderPadDebug();
 }
 
@@ -750,19 +450,19 @@ function loop(nowMs: number): void {
   if (steps === MAX_STEPS_PER_FRAME) accumulator = 0;
 
   render();
-  audio.update(gravitySample.strongestPull, gravitySample.closestClearance, frameDt, economy.cargoFraction);
+  audio.update(gravitySample.strongestPull, gravitySample.closestClearance, frameDt, 0);
   tickToast(frameDt);
   updateStatus();
   tuningPanel.update({
     fps,
     speed: ship.speed,
-    cargo: economy.cargo,
-    bank: economy.bank,
+    cargo: 0,
+    bank: 0,
     energy: energy.fraction,
-    mineRate: economy.mineRate,
+    mineRate: 0,
     pull: gravitySample.strongestPull,
     clearance: gravitySample.closestClearance,
-    state: lifecycle.current,
+    state: race.state,
   });
 
   frameCount++;
@@ -771,52 +471,697 @@ function loop(nowMs: number): void {
     frameCount = 0;
     fpsLastMs = nowMs;
 
-    const speed = ship.speed.toFixed(1);
-    const pull = gravitySample.strongestPull.toFixed(2);
-    const clearance = gravitySample.closestClearance.toFixed(0);
-    const feedbackLevel = Math.round(feedback.level * 100);
+    const target = checkpoints.targetPosition(race.nextCheckpoint);
+    const sp = ship.position;
+    const targetDist = target ? Math.hypot(target.x - sp.x, target.y - sp.y, target.z - sp.z) : 0;
     const padHint = input.readGamepad() ? 'gamepad yes' : 'gamepad -';
     const lockHint = input.isPointerLocked() ? '' : '  (click to capture mouse)';
-
     hud.textContent =
-      `Slingshot — single-player run loop\n` +
+      `Slingshot League - time trials\n` +
       `fps ${fps.toFixed(0)}  dt ${(FIXED_DT * 1000).toFixed(2)}ms  cam ${cameraMode}  ${zoneLabel(currentZone)}\n` +
-      `speed ${speed} m/s  peak ${peakSpeed.toFixed(1)} m/s  accel ${accelMag.toFixed(1)} m/s²\n` +
-      `pull ${pull} m/s²  clearance ${clearance}m  shake ${feedbackLevel}%\n` +
-      `${asteroidField.asteroids.length} asteroids  ${enemies.enemies.filter((e) => e.alive).length} hostiles  ${weapons.projectiles.filter((p) => p.alive).length} projectiles  ${padHint}${lockHint}`;
+      `course ${selectedCourse.name}  state ${race.state}  gate ${Math.min(race.nextCheckpoint + 1, selectedCourse.gates.length)} / ${selectedCourse.gates.length}\n` +
+      `time ${formatRaceTime(race.elapsedSec)}  target ${targetDist.toFixed(0)}m  speed ${ship.speed.toFixed(1)} m/s  peak ${peakSpeed.toFixed(1)}\n` +
+      `pull ${gravitySample.strongestPull.toFixed(2)} m/s^2  clearance ${gravitySample.closestClearance.toFixed(0)}m  accel ${accelMag.toFixed(1)} m/s^2\n` +
+      `${asteroidField.asteroids.length} asteroids  ghost ${leaderboard.getRecord(selectedCourse.id) ? 'yes' : '-'}  ${padHint}${lockHint}`;
   }
 
   requestAnimationFrame(loop);
 }
 
 function updateStatus(): void {
-  const cargo = Math.round(economy.cargo);
-  const cargoCap = Math.round(economy.cargoCap);
-  const bank = Math.round(economy.bank);
+  const record = leaderboard.getRecord(selectedCourse.id);
+  const bestSource = record?.source === 'supabase' ? 'GLOBAL' : 'LOCAL';
+  const best = record ? `${bestSource} ${formatRaceTime(record.bestTimeSec)}` : '--:--.---';
   const ePct = Math.round(energy.fraction * 100);
-  const reserve = energy.inReserve;
-  const mineRate = economy.mineRate.toFixed(1);
-  const cargoBar = bar(economy.cargo / Math.max(1, economy.cargoCap), 14);
   const energyBar = bar(energy.fraction, 14);
   const hpBar = bar(ship.hpFraction, 10);
-
-  const lifecycleHint =
-    lifecycle.current === 'dying' ? `<span style="color:#d06424">— SHIP DESTROYED</span>` :
-    lifecycle.current === 'respawning' ? `<span style="color:#d06424">— RESPAWNING</span>` :
-    lifecycle.current === 'invuln' ? `<span style="color:#6dd6c8">— INVULN</span>` :
-    '';
-
-  const hpStyle = ship.hpFraction < 0.3 ? 'color:#ff5a4a;font-weight:bold' : '';
-  const baseHint = inBase && !hangar.open ? '<span class="mining">— Tab/Back: HANGAR</span>' : '';
-  const hangarHint = hangar.open ? '<span style="color:#6dd6c8">— HANGAR OPEN</span>' : '';
+  const splitIndex = race.nextCheckpoint - 1;
+  const splitDelta = record && splitIndex >= 0 && record.bestSplits[splitIndex] !== undefined
+    ? formatDelta(race.splits[splitIndex] - record.bestSplits[splitIndex])
+    : '';
+  const stateLine =
+    race.state === 'countdown' ? `COUNTDOWN ${Math.ceil(race.countdownSec)}` :
+    race.state === 'finished' ? finishMessage :
+    race.state === 'invalid' ? `INVALID - ${race.invalidReason}` :
+    race.state === 'select' ? 'SELECT COURSE' :
+    'RACING';
 
   statusBar.innerHTML = `
-    <div class="line"><b>HULL</b> <span style="${hpStyle}">${hpBar} ${Math.round(ship.hp)} / ${Math.round(ship.hpMax)}</span></div>
-    <div class="line"><b>CARGO</b> ${cargoBar} ${cargo} / ${cargoCap} kg ${mineRate !== '0.0' ? `<span class="mining">+${mineRate} kg/s</span>` : ''}</div>
-    <div class="line"><b>BANK</b>  ${bank} kg ${baseHint}${hangarHint}</div>
-    <div class="line"><b>ENERGY</b> ${energyBar} ${ePct}% ${reserve ? '<span class="reserve">RESERVE</span>' : ''}</div>
-    <div class="line">${lifecycleHint}</div>
+    <div class="line"><b>TIME</b> ${formatRaceTime(race.elapsedSec)} <span class="mining">BEST ${best}</span></div>
+    <div class="line"><b>GATE</b> ${Math.min(race.nextCheckpoint + 1, selectedCourse.gates.length)} / ${selectedCourse.gates.length} ${splitDelta ? `<span class="reserve">${splitDelta}</span>` : ''}</div>
+    <div class="line"><b>ENERGY</b> ${energyBar} ${ePct}%</div>
+    <div class="line"><b>HULL</b> ${hpBar} ${Math.round(ship.hp)} / ${Math.round(ship.hpMax)}</div>
+    <div class="line"><b>STATE</b> ${stateLine} <span class="mining">R/Start restart</span></div>
   `;
+}
+
+function renderPadDebug(): void {
+  const pad = input.readGamepad();
+  if (!pad) {
+    padDebug.textContent = 'No standard gamepad detected';
+    return;
+  }
+  padDebug.innerHTML = `<b>${pad.id}</b><br>axes ${pad.axes.map((a) => a.toFixed(2)).join('  ')}<br>buttons ${pad.buttons.map((b, i) => `${i}:${b.pressed ? '1' : '0'}`).join(' ')}`;
+}
+
+function renderControls(): void {
+  controls.innerHTML = `
+    <h3>SLINGSHOT LEAGUE</h3>
+    <div class="row"><b>Gamepad</b> L stick pitch/roll, R stick yaw/up-down</div>
+    <div class="row"><b>Gamepad</b> LB/RB strafe left/right</div>
+    <div class="row"><b>Gamepad</b> RT/LT thrust/brake, B boost</div>
+    <div class="row"><b>Gamepad</b> D-pad choose/strafe, A start, Start restart</div>
+    <div class="row"><b>Enter</b> start selected course</div>
+    <div class="row"><b>1 / 2 / 3</b> choose course</div>
+    <div class="row"><b>R</b> restart run</div>
+    <div class="row"><b>W/S</b> thrust / brake</div>
+    <div class="row"><b>A/D</b> roll, <b>Q/E</b> yaw</div>
+    <div class="row"><b>Space/Ctrl</b> strafe up/down</div>
+    <div class="row"><b>Shift</b> boost</div>
+    <div class="row"><b>C</b> camera, <b>V</b> ship visual</div>
+    <div class="row"><b>P</b> tuning, <b>G</b> pad debug, <b>H</b> hide</div>
+  `;
+}
+
+function renderCourseSelect(message: string, recordOverride?: CourseRecord): void {
+  const record = recordOverride ?? leaderboard.getRecord(selectedCourse.id);
+  const entries = leaderboard.getCourseEntries(selectedCourse.id);
+  const remoteError = leaderboard.getLastRemoteError();
+  const remoteStatus = leaderboard.isRemoteEnabled()
+    ? remoteError
+      ? `Supabase issue: ${shortError(remoteError)}`
+      : entries.some((entry) => entry.source === 'supabase')
+        ? 'Supabase connected'
+        : 'Supabase connected - no global runs yet'
+    : 'Local only - configure Supabase env vars for shared ghosts';
+  const rows = RACE_COURSES.map((course, index) => {
+    const r = leaderboard.getRecord(course.id);
+    const selected = course.id === selectedCourse.id ? ' selected' : '';
+    const source = r?.source === 'supabase' ? 'Global' : 'Local';
+    return `<button class="course-button${selected}" data-course="${index}">
+      <span class="course-number">${String(index + 1).padStart(2, '0')}</span>
+      <span class="course-main">
+        <strong>${escapeHtml(course.name)}</strong>
+        <small>${escapeHtml(course.summary)}</small>
+        <span class="course-meta">
+          <em>${source} ${r ? formatRaceTime(r.bestTimeSec) : '--:--.---'}${r?.playerName ? ` / ${escapeHtml(r.playerName)}` : ''}</em>
+          <em>${course.gates.length} gates</em>
+          <em>Gold ${formatRaceTime(course.medals.gold)}</em>
+        </span>
+      </span>
+    </button>`;
+  }).join('');
+  const splits = record
+    ? record.bestSplits.map((s, i) => `<span><b>S${i + 1}</b>${formatRaceTime(s)}</span>`).join('')
+    : '<span>No completed run yet.</span>';
+  const standings = renderLeaderboardEntries(entries);
+  const ghostLabel = record
+    ? `${record.source === 'supabase' ? 'Global' : 'Local'} ghost: ${formatRaceTime(record.bestTimeSec)}${record.playerName ? ` by ${escapeHtml(record.playerName)}` : ''}`
+    : 'No ghost available yet.';
+  coursePanel.innerHTML = `
+    <div class="course-card" role="dialog" aria-label="Race course select">
+      <div class="course-header">
+        <div>
+          <div class="league-title">Dead Iron Racing League</div>
+          <h1>${escapeHtml(selectedCourse.name)}</h1>
+          <p>${escapeHtml(message)}</p>
+        </div>
+        <div class="pilot-row">
+          <label for="pilot-name">Pilot</label>
+          <input id="pilot-name" maxlength="40" value="${escapeHtml(leaderboard.getPlayerName())}" autocomplete="nickname" spellcheck="false">
+          <span>${escapeHtml(remoteStatus)}</span>
+        </div>
+      </div>
+      <div class="course-layout">
+        <section class="course-list" aria-label="Courses">
+          <div class="section-title">
+            <h2>Courses</h2>
+            <span>${RACE_COURSES.length} live circuits</span>
+          </div>
+          <div class="course-grid">${rows}</div>
+        </section>
+        <section class="race-panel" aria-label="Leaderboard and ghost target">
+          <div class="section-title">
+            <h2>Leaderboard</h2>
+            <span>${entries.length ? 'Best shared runs' : 'Awaiting first run'}</span>
+          </div>
+          ${standings}
+          <div class="target-panel">
+            <div class="section-title">
+              <h2>Ghost Target</h2>
+              <span>${record ? 'Replay armed' : 'No replay'}</span>
+            </div>
+            <div class="ghost-target">${ghostLabel}</div>
+            <div class="splits">${splits}</div>
+          </div>
+          <div class="medal-strip" aria-label="Medal times">
+            <span><b>Gold</b>${formatRaceTime(selectedCourse.medals.gold)}</span>
+            <span><b>Silver</b>${formatRaceTime(selectedCourse.medals.silver)}</span>
+            <span><b>Bronze</b>${formatRaceTime(selectedCourse.medals.bronze)}</span>
+          </div>
+        </section>
+      </div>
+      <div class="course-footer">
+        <div class="command-strip">
+          <span>Enter / A</span>
+          <span>D-pad / 1-3</span>
+          <span>R / Start</span>
+        </div>
+        <div class="course-actions">
+          <button id="restart-race" class="secondary-action">Reset Ship</button>
+          <button id="start-race" class="primary-action">Start Race</button>
+        </div>
+      </div>
+    </div>
+  `;
+  coursePanel.style.display = '';
+  coursePanel.querySelectorAll<HTMLButtonElement>('[data-course]').forEach((button) => {
+    button.addEventListener('click', () => selectCourse(Number(button.dataset.course ?? '0')));
+  });
+  const pilotInput = coursePanel.querySelector<HTMLInputElement>('#pilot-name');
+  const savePilotName = (): void => {
+    if (!pilotInput) return;
+    void leaderboard.setPlayerName(pilotInput.value).then(() => {
+      pilotInput.value = leaderboard.getPlayerName();
+      renderCourseSelect('Pilot name saved. New finished runs will use this name.', recordOverride);
+    });
+  };
+  pilotInput?.addEventListener('change', savePilotName);
+  pilotInput?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    pilotInput.blur();
+  });
+  coursePanel.querySelector<HTMLButtonElement>('#start-race')?.addEventListener('click', () => startRace());
+  coursePanel.querySelector<HTMLButtonElement>('#restart-race')?.addEventListener('click', () => prepareCourse(selectedCourse));
+}
+
+function renderLeaderboardEntries(entries: readonly RaceLeaderboardEntry[]): string {
+  if (entries.length === 0) return '<div class="empty-standings">No shared runs for this course yet.</div>';
+  return `<ol class="leaderboard">${entries.map((entry) => `
+    <li>
+      <span>#${entry.rank}</span>
+      <b>${formatRaceTime(entry.timeSec)}</b>
+      <em>${escapeHtml(entry.playerName ?? 'Anonymous Pilot')}</em>
+    </li>
+  `).join('')}</ol>`;
+}
+
+function injectRaceStyles(): void {
+  const style = document.createElement('style');
+  style.textContent = `
+    #course-select {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: grid;
+      place-items: center;
+      padding: 26px;
+      box-sizing: border-box;
+      background:
+        linear-gradient(90deg, rgba(3, 6, 10, 0.82), rgba(3, 6, 10, 0.34) 48%, rgba(3, 6, 10, 0.78)),
+        radial-gradient(circle at 45% 38%, rgba(77, 169, 183, 0.18), rgba(0, 0, 0, 0.72) 58%);
+      color: #f1eee7;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #course-select .course-card {
+      width: min(1100px, 100%);
+      max-height: calc(100vh - 52px);
+      overflow: auto;
+      border: 1px solid rgba(121, 225, 214, 0.42);
+      background:
+        linear-gradient(180deg, rgba(10, 17, 24, 0.94), rgba(7, 9, 14, 0.9)),
+        rgba(8, 10, 16, 0.92);
+      box-shadow: 0 24px 90px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      padding: 22px;
+      box-sizing: border-box;
+    }
+    #course-select .course-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+      gap: 22px;
+      align-items: end;
+      padding-bottom: 18px;
+      border-bottom: 1px solid rgba(121, 225, 214, 0.16);
+    }
+    #course-select .league-title {
+      color: #79e1d6;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    #course-select h1 {
+      margin: 8px 0 6px;
+      font-size: clamp(30px, 4.6vw, 58px);
+      line-height: 0.95;
+      letter-spacing: 0;
+      font-weight: 900;
+      color: #fff8e8;
+    }
+    #course-select p {
+      max-width: 620px;
+      margin: 0;
+      color: #c8c3b7;
+      line-height: 1.45;
+      font-size: 14px;
+    }
+    #course-select .course-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.82fr);
+      gap: 18px;
+      margin-top: 18px;
+    }
+    #course-select .course-list,
+    #course-select .race-panel {
+      min-width: 0;
+    }
+    #course-select .section-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      min-height: 24px;
+      margin-bottom: 9px;
+    }
+    #course-select h2 {
+      margin: 0;
+      color: #f28f45;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-weight: 800;
+    }
+    #course-select .section-title span {
+      color: rgba(241, 238, 231, 0.58);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    #course-select .course-grid {
+      display: grid;
+      gap: 10px;
+    }
+    #course-select button {
+      font: inherit;
+      color: #f1eee7;
+      border: 1px solid rgba(148, 113, 76, 0.45);
+      background: rgba(12, 15, 20, 0.78);
+      text-align: left;
+      cursor: pointer;
+    }
+    #course-select button:hover,
+    #course-select button:focus-visible {
+      border-color: rgba(121, 225, 214, 0.72);
+      outline: none;
+    }
+    #course-select .course-button {
+      min-height: 96px;
+      padding: 14px;
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      border-left: 4px solid rgba(242, 143, 69, 0.52);
+    }
+    #course-select .course-button.selected {
+      border-color: rgba(121, 225, 214, 0.88);
+      border-left-color: #79e1d6;
+      background: linear-gradient(90deg, rgba(29, 67, 73, 0.82), rgba(15, 24, 31, 0.88));
+    }
+    #course-select .course-number {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      border: 1px solid rgba(121, 225, 214, 0.38);
+      color: #79e1d6;
+      font-weight: 900;
+      font-size: 16px;
+      background: rgba(0, 0, 0, 0.24);
+    }
+    #course-select .course-main {
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+    }
+    #course-select .course-main strong {
+      color: #fff8e8;
+      font-size: 20px;
+      line-height: 1.1;
+      font-weight: 850;
+    }
+    #course-select .course-main small {
+      color: #c8c3b7;
+      line-height: 1.35;
+      font-size: 13px;
+    }
+    #course-select .course-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    #course-select .course-meta em,
+    #course-select .command-strip span,
+    #course-select .medal-strip span,
+    #course-select .splits span {
+      border: 1px solid rgba(121, 225, 214, 0.2);
+      background: rgba(6, 10, 14, 0.5);
+      color: #79e1d6;
+      font-style: normal;
+      font-size: 11px;
+      line-height: 1;
+      padding: 6px 8px;
+    }
+    #course-select .pilot-row {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr);
+      align-items: end;
+      gap: 8px;
+      color: #c8c3b7;
+      font-size: 12px;
+    }
+    #course-select .pilot-row label {
+      color: #79e1d6;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-weight: 800;
+    }
+    #course-select .pilot-row input {
+      min-width: 0;
+      border: 1px solid rgba(121, 225, 214, 0.42);
+      background: rgba(2, 4, 8, 0.62);
+      color: #fff8e8;
+      padding: 10px 11px;
+      font: inherit;
+      font-size: 14px;
+    }
+    #course-select .pilot-row span {
+      grid-column: 2;
+      color: rgba(241, 238, 231, 0.62);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #course-select .leaderboard {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 7px;
+      font-size: 13px;
+    }
+    #course-select .leaderboard li {
+      display: grid;
+      grid-template-columns: 42px 88px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      min-height: 34px;
+      padding: 0 10px;
+      color: #c8c3b7;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.035);
+    }
+    #course-select .leaderboard b { color: #fff8e8; font-weight: 800; }
+    #course-select .leaderboard em {
+      color: #79e1d6;
+      font-style: normal;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #course-select .empty-standings,
+    #course-select .ghost-target {
+      color: #c8c3b7;
+      font-size: 13px;
+      line-height: 1.45;
+      min-height: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.035);
+      padding: 12px;
+    }
+    #course-select .target-panel {
+      margin-top: 18px;
+    }
+    #course-select .splits {
+      margin: 10px 0 0;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: #c8c3b7;
+      font-size: 12px;
+    }
+    #course-select .splits b,
+    #course-select .medal-strip b {
+      color: #f28f45;
+      margin-right: 6px;
+      font-weight: 800;
+    }
+    #course-select .medal-strip {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    #course-select .medal-strip span {
+      color: #fff8e8;
+      text-align: center;
+    }
+    #course-select .course-footer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(121, 225, 214, 0.16);
+    }
+    #course-select .command-strip {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    #course-select .command-strip span {
+      color: rgba(241, 238, 231, 0.72);
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+    #course-select .course-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    #course-select .course-actions button {
+      min-width: 132px;
+      padding: 12px 16px;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 900;
+      font-size: 12px;
+    }
+    #course-select .primary-action {
+      border-color: rgba(121, 225, 214, 0.9);
+      background: linear-gradient(180deg, rgba(58, 119, 121, 0.95), rgba(24, 60, 66, 0.95));
+    }
+    #course-select .secondary-action {
+      color: #d4cec0;
+    }
+    @media (max-width: 900px) {
+      #course-select {
+        padding: 14px;
+        place-items: start center;
+      }
+      #course-select .course-card {
+        max-height: calc(100vh - 28px);
+        padding: 16px;
+      }
+      #course-select .course-header,
+      #course-select .course-layout,
+      #course-select .course-footer {
+        grid-template-columns: 1fr;
+      }
+      #course-select .course-footer {
+        align-items: stretch;
+      }
+      #course-select .course-actions,
+      #course-select .course-actions button {
+        width: 100%;
+      }
+      #course-select .course-actions button {
+        min-width: 0;
+      }
+    }
+    @media (max-width: 560px) {
+      #course-select h1 {
+        font-size: 34px;
+      }
+      #course-select .course-button {
+        grid-template-columns: 38px minmax(0, 1fr);
+        min-height: 0;
+        padding: 12px;
+      }
+      #course-select .course-number {
+        width: 34px;
+        height: 34px;
+        font-size: 13px;
+      }
+      #course-select .pilot-row,
+      #course-select .medal-strip,
+      #course-select .course-actions {
+        grid-template-columns: 1fr;
+        flex-direction: column;
+      }
+      #course-select .pilot-row span {
+        grid-column: 1;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function createRingTracker(): HTMLDivElement {
+  injectRingTrackerStyles();
+  const root = document.createElement('div');
+  root.id = 'ring-tracker';
+  root.innerHTML = `
+    <div class="ring-edge top"></div>
+    <div class="ring-edge right"></div>
+    <div class="ring-edge bottom"></div>
+    <div class="ring-edge left"></div>
+  `;
+  document.body.appendChild(root);
+  return root;
+}
+
+function updateRingTracker(): void {
+  const target = checkpoints.targetPosition(race.nextCheckpoint);
+  if ((race.state !== 'racing' && race.state !== 'countdown') || !target) {
+    setRingTrackerEdges(0, 0, 0, 0);
+    return;
+  }
+
+  ringTargetWorld.copy(target);
+  ringTargetProj.copy(ringTargetWorld).project(camera);
+  const inSight = ringTargetProj.z >= -1
+    && ringTargetProj.z <= 1
+    && Math.abs(ringTargetProj.x) <= 0.94
+    && Math.abs(ringTargetProj.y) <= 0.94;
+  if (inSight) {
+    setRingTrackerEdges(0, 0, 0, 0);
+    return;
+  }
+
+  ringTargetDir.copy(ringTargetWorld).sub(camera.position);
+  if (ringTargetDir.lengthSq() < 0.0001) {
+    setRingTrackerEdges(0, 0, 0, 0);
+    return;
+  }
+
+  ringTargetDir.normalize();
+  cameraRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  cameraUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+  cameraForward.set(0, 0, -1).applyQuaternion(camera.quaternion);
+
+  const side = ringTargetDir.dot(cameraRight);
+  const vertical = ringTargetDir.dot(cameraUp);
+  const forward = ringTargetDir.dot(cameraForward);
+  const edgeOverrun = Math.max(Math.abs(ringTargetProj.x), Math.abs(ringTargetProj.y)) - 0.94;
+  const offscreen = Math.max(0, Math.min(1, edgeOverrun / 0.7));
+  const behind = forward < 0 ? 1 : 0;
+  const intensity = 0.22 + Math.max(offscreen, behind) * 0.58;
+  const absSide = Math.abs(side);
+  const absVertical = Math.abs(vertical);
+
+  if (absSide + absVertical < 0.08) {
+    const wrapGlow = intensity * 0.36;
+    setRingTrackerEdges(wrapGlow, wrapGlow, wrapGlow, wrapGlow);
+    return;
+  }
+
+  const horizontalGlow = intensity * (0.22 + absSide * 0.78);
+  const verticalGlow = intensity * (0.22 + absVertical * 0.78);
+  setRingTrackerEdges(
+    vertical > 0 ? verticalGlow : 0,
+    side > 0 ? horizontalGlow : 0,
+    vertical < 0 ? verticalGlow : 0,
+    side < 0 ? horizontalGlow : 0,
+  );
+}
+
+function setRingTrackerEdges(top: number, right: number, bottom: number, left: number): void {
+  ringTracker.style.setProperty('--ring-top', top.toFixed(3));
+  ringTracker.style.setProperty('--ring-right', right.toFixed(3));
+  ringTracker.style.setProperty('--ring-bottom', bottom.toFixed(3));
+  ringTracker.style.setProperty('--ring-left', left.toFixed(3));
+}
+
+function injectRingTrackerStyles(): void {
+  if (document.getElementById('ring-tracker-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'ring-tracker-styles';
+  style.textContent = `
+    #ring-tracker {
+      --ring-top: 0;
+      --ring-right: 0;
+      --ring-bottom: 0;
+      --ring-left: 0;
+      position: fixed;
+      inset: 0;
+      z-index: 45;
+      pointer-events: none;
+    }
+    #ring-tracker .ring-edge {
+      position: absolute;
+      mix-blend-mode: screen;
+      transition: opacity 0.08s linear;
+    }
+    #ring-tracker .top {
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 18vh;
+      opacity: var(--ring-top);
+      background: radial-gradient(ellipse at top center, rgba(74, 163, 255, 0.62), rgba(74, 163, 255, 0.18) 38%, rgba(74, 163, 255, 0) 74%);
+    }
+    #ring-tracker .right {
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 18vw;
+      opacity: var(--ring-right);
+      background: radial-gradient(ellipse at right center, rgba(74, 163, 255, 0.62), rgba(74, 163, 255, 0.18) 38%, rgba(74, 163, 255, 0) 74%);
+    }
+    #ring-tracker .bottom {
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 18vh;
+      opacity: var(--ring-bottom);
+      background: radial-gradient(ellipse at bottom center, rgba(74, 163, 255, 0.62), rgba(74, 163, 255, 0.18) 38%, rgba(74, 163, 255, 0) 74%);
+    }
+    #ring-tracker .left {
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 18vw;
+      opacity: var(--ring-left);
+      background: radial-gradient(ellipse at left center, rgba(74, 163, 255, 0.62), rgba(74, 163, 255, 0.18) 38%, rgba(74, 163, 255, 0) 74%);
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function shortError(message: string): string {
+  const compact = message.replace(/\s+/g, ' ').trim();
+  return compact.length > REMOTE_ERROR_MAX ? `${compact.slice(0, REMOTE_ERROR_MAX)}...` : compact;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 function bar(frac: number, width: number): string {
@@ -826,10 +1171,18 @@ function bar(frac: number, width: number): string {
   return `<span class="bar"><span class="bar-filled">${'█'.repeat(filled)}</span>${'░'.repeat(empty)}</span>`;
 }
 
-showToast(`LAUNCH FROM BASE  -  mine asteroids, return to deposit`, 3200);
-requestAnimationFrame(loop);
+let toastTimer = 0;
+function showToast(text: string, durationMs: number): void {
+  toast.textContent = text;
+  toast.style.opacity = '1';
+  toastTimer = durationMs / 1000;
+}
 
-// Touch a couple imports so unused-warning doesn't fire when only types are used.
-void upgradeApplyCost;
-void manifestPartCost;
-void WEAPON_TUNING;
+function tickToast(dt: number): void {
+  if (toastTimer <= 0) return;
+  toastTimer -= dt;
+  if (toastTimer <= 0) toast.style.opacity = '0';
+}
+
+showToast('DEAD IRON RACING LEAGUE', 2400);
+requestAnimationFrame(loop);

@@ -14,6 +14,7 @@ import {
 import {
   COL_ASTEROID,
   COL_BASE,
+  COL_CHECKPOINT,
   COL_ENEMY,
   COL_PICKUP,
   COL_PROJECTILE,
@@ -72,7 +73,7 @@ export const SHIP_TUNING = {
   STRAFE_THRUST: 30,
   FORWARD_THRUST_BIAS: 1.0,
 
-  MAX_PITCH_RATE: 1.1,
+  MAX_PITCH_RATE: 1.5,
   MAX_YAW_RATE: 1.5,
   MAX_ROLL_RATE: 1.5,
 
@@ -104,6 +105,8 @@ const HULL_VOLUME = (HULL_HX * 2) * (HULL_HY * 2) * (HULL_HZ * 2);
 
 const LINEAR_DAMPING  = 0.0;
 const ANGULAR_DAMPING = 0.0;
+const SHIP_ACTIVE_FILTER = COL_ASTEROID | COL_PICKUP | COL_BASE | COL_PROJECTILE | COL_ENEMY | COL_CHECKPOINT;
+const SHIP_INVULN_FILTER = COL_PICKUP | COL_BASE | COL_CHECKPOINT;
 
 export class Ship {
   readonly body: RAPIER.RigidBody;
@@ -149,7 +152,7 @@ export class Ship {
     const colliderDesc = RAPIER.ColliderDesc
       .cuboid(HULL_HX, HULL_HY, HULL_HZ)
       .setDensity(density)
-      .setCollisionGroups(interactionGroups(COL_SHIP, COL_ASTEROID | COL_PICKUP | COL_BASE | COL_PROJECTILE | COL_ENEMY))
+      .setCollisionGroups(interactionGroups(COL_SHIP, SHIP_ACTIVE_FILTER))
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
       .setFriction(0.1)
       .setRestitution(0.05);
@@ -396,9 +399,9 @@ export class Ship {
     const collider = this._physics.world.getCollider(this.colliderHandle);
     if (!collider) return;
     if (invuln) {
-      collider.setCollisionGroups(interactionGroups(COL_SHIP, COL_PICKUP | COL_BASE));
+      collider.setCollisionGroups(interactionGroups(COL_SHIP, SHIP_INVULN_FILTER));
     } else {
-      collider.setCollisionGroups(interactionGroups(COL_SHIP, COL_ASTEROID | COL_PICKUP | COL_BASE | COL_PROJECTILE | COL_ENEMY));
+      collider.setCollisionGroups(interactionGroups(COL_SHIP, SHIP_ACTIVE_FILTER));
     }
   }
 

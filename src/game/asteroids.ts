@@ -15,6 +15,8 @@ export interface Asteroid {
   readonly colliderHandle: number;
 }
 
+export type AsteroidTuningPatch = Partial<typeof ASTEROID_TUNING>;
+
 // Procedural-field tunables. Hand-placed rocks remain hardcoded below since
 // their positions are deliberate landmarks. Regenerate the field via
 // AsteroidField.regenerate() to apply changes to existing runs.
@@ -175,11 +177,13 @@ export class AsteroidField {
   private scene: THREE.Scene;
   private physics: PhysicsWorld;
   private registry: ContactRegistry;
+  private seedBase: number;
 
-  constructor(scene: THREE.Scene, physics: PhysicsWorld, registry: ContactRegistry) {
+  constructor(scene: THREE.Scene, physics: PhysicsWorld, registry: ContactRegistry, seedBase = 200) {
     this.scene = scene;
     this.physics = physics;
     this.registry = registry;
+    this.seedBase = seedBase;
     this.addProcedural();
   }
 
@@ -194,7 +198,9 @@ export class AsteroidField {
 
   /** Tear down + rebuild the field. Used by tuning panel after editing
    *  ASTEROID_TUNING. Existing trajectory ribbon will refresh next frame. */
-  regenerate(): void {
+  regenerate(seedBase = this.seedBase, tuning?: AsteroidTuningPatch): void {
+    this.seedBase = seedBase;
+    if (tuning) Object.assign(ASTEROID_TUNING, tuning);
     for (const a of this.asteroids) {
       this.registry.unregister(a.colliderHandle);
       this.physics.world.removeRigidBody(a.body);
@@ -208,7 +214,7 @@ export class AsteroidField {
   private addProcedural(): void {
     const t = ASTEROID_TUNING;
     for (let i = 0; i < t.PROCEDURAL_COUNT; i++) {
-      const seed = 200 + i * 13.37;
+      const seed = this.seedBase + i * 13.37;
       const sizeRoll = seededNoise(seed);
       // Uniform points in a spherical shell. cube root of [0,1] → uniform
       // by volume; raise to RADIAL_BIAS to pack inward.

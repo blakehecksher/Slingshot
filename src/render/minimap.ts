@@ -12,6 +12,9 @@ export class Minimap {
   private asteroidMeshes: THREE.Mesh[] = [];
   private ship: THREE.Mesh;
   private pathLine: THREE.Line;
+  private checkpointMarker: THREE.Mesh;
+  private finishMarker: THREE.Mesh;
+  private ghostMarker: THREE.Mesh;
   private pathPositions = new Float32Array(MAX_POINTS * 3);
   private pathColors = new Float32Array(MAX_POINTS * 3);
   private pathPositionAttr = new THREE.BufferAttribute(this.pathPositions, 3);
@@ -62,6 +65,28 @@ export class Minimap {
       new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9 }),
     );
     this.scene.add(this.pathLine);
+
+    const markerGeom = new THREE.RingGeometry(18, 28, 24);
+    this.checkpointMarker = new THREE.Mesh(
+      markerGeom,
+      new THREE.MeshBasicMaterial({ color: 0x6dd6c8, transparent: true, opacity: 0.92, side: THREE.DoubleSide }),
+    );
+    this.checkpointMarker.rotation.x = -Math.PI / 2;
+    this.scene.add(this.checkpointMarker);
+
+    this.finishMarker = new THREE.Mesh(
+      markerGeom,
+      new THREE.MeshBasicMaterial({ color: 0xd06424, transparent: true, opacity: 0.88, side: THREE.DoubleSide }),
+    );
+    this.finishMarker.rotation.x = -Math.PI / 2;
+    this.scene.add(this.finishMarker);
+
+    this.ghostMarker = new THREE.Mesh(
+      new THREE.CircleGeometry(18, 18),
+      new THREE.MeshBasicMaterial({ color: 0x6dd6ff, transparent: true, opacity: 0.72, side: THREE.DoubleSide }),
+    );
+    this.ghostMarker.rotation.x = -Math.PI / 2;
+    this.scene.add(this.ghostMarker);
   }
 
   update(
@@ -69,6 +94,11 @@ export class Minimap {
     trajectory: Trajectory,
     shipPosition: { x: number; y: number; z: number },
     shipYaw: number,
+    markers?: {
+      nextCheckpoint?: THREE.Vector3 | null;
+      finish?: THREE.Vector3 | null;
+      ghost?: THREE.Vector3 | null;
+    },
   ): void {
     for (let i = 0; i < this.asteroidMeshes.length; i++) {
       const mesh = this.asteroidMeshes[i];
@@ -89,6 +119,9 @@ export class Minimap {
     }
 
     this.ship.rotation.y = shipYaw;
+    this.updateMarker(this.checkpointMarker, markers?.nextCheckpoint ?? null, shipPosition);
+    this.updateMarker(this.finishMarker, markers?.finish ?? null, shipPosition);
+    this.updateMarker(this.ghostMarker, markers?.ghost ?? null, shipPosition);
 
     const count = Math.min(MAX_POINTS, trajectory.points.length);
     for (let i = 0; i < count; i++) {
@@ -104,6 +137,19 @@ export class Minimap {
     this.pathLine.geometry.setDrawRange(0, count);
     this.pathPositionAttr.needsUpdate = true;
     this.pathColorAttr.needsUpdate = true;
+  }
+
+  private updateMarker(mesh: THREE.Mesh, world: THREE.Vector3 | null, shipPosition: { x: number; y: number; z: number }): void {
+    if (!world) {
+      mesh.visible = false;
+      return;
+    }
+    const x = world.x - shipPosition.x;
+    const z = world.z - shipPosition.z;
+    const inRange = Math.abs(x) < MAP_RADIUS && Math.abs(z) < MAP_RADIUS;
+    mesh.visible = inRange;
+    if (!inRange) return;
+    mesh.position.set(x, 5, z);
   }
 
   render(renderer: THREE.WebGLRenderer): void {

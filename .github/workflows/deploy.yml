@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [racing-time-trials]
   workflow_dispatch:
 
 permissions:

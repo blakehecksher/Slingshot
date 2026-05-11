@@ -1,14 +1,12 @@
-# Slingshot
+# Slingshot - Racing Time Trials
 
-Browser-based 3D spaceship game about momentum and gravity. Mine asteroids,
-ride gravity wells, fight scavengers, return to base, build a better ship,
-go deeper.
+Browser-based 3D spaceship racing game about momentum, gravity wells, and clean checkpoint lines. This branch turns the original mining loop into a Dead Iron Racing League: choose a course, launch from the base, fly ordered holographic gates, and race your personal-best ghost.
 
 Specs in `docs/spec/`:
 
-- `gravity-game-vision.md` — what the game is and how it should feel.
-- `slingshot-story-spec.md` — Dead Iron, the field, the working-class fiction.
-- `ship-asset-pipeline.md` — kit-built / full-model / primitive ship visuals.
+- `gravity-game-vision.md` - what the gravity flight should feel like.
+- `slingshot-story-spec.md` - Dead Iron, the field, and the working-field fiction.
+- `ship-asset-pipeline.md` - kit-built / full-model / primitive ship visuals.
 
 ## Run it
 
@@ -18,6 +16,16 @@ npm run dev      # http://localhost:5173
 npm run build    # tsc + vite build
 ```
 
+## Current loop
+
+1. Choose one of three league courses.
+2. Launch from the base after the countdown.
+3. Fly through each checkpoint in order.
+4. Finish back near the base beacon.
+5. Save a local personal best, publish shared runs when Supabase is configured, and race the fastest known hologram ghost.
+
+Mining, combat, cargo economy, hangar, and upgrades still exist in the repo, but the active `racing-time-trials` entrypoint keeps them inactive so runs are comparable.
+
 ## Controls
 
 ### Xbox controller
@@ -25,72 +33,58 @@ npm run build    # tsc + vite build
 | Input | Action |
 |---|---|
 | Left stick | Roll / pitch |
-| Right stick | Look around (chase/cockpit cam) |
-| RT | Forward thrust (full pull = boost stage) |
+| Right stick | Look around |
+| RT | Forward thrust |
 | LT | Brake / reverse |
 | LB / RB | Yaw right / left |
-| D-pad | Strafe (up/down/left/right) |
-| A | Fire weapon |
-| B | Boost (drains energy) |
-| X | Cycle ship visual |
-| Y | Toggle chase / cockpit camera |
-| Back | Hangar (when docked at base) |
+| D-pad | Strafe |
+| B | Boost |
+| X | Cycle ship visual before a race |
+| Y / Back | Toggle camera |
+| Start | Restart current race |
+| D-pad on course screen | Select course |
+| A on course screen | Start selected course |
 
 ### Keyboard + mouse
 
 | Input | Action |
 |---|---|
+| Enter | Start selected course |
+| 1 / 2 / 3 | Select course |
+| R | Restart current course |
 | W / S | Thrust forward / brake |
 | A / D | Roll left / right |
 | Q / E | Yaw left / right |
 | Space / Ctrl | Strafe up / down |
 | Shift | Boost |
-| F | Fire weapon |
-| Tab | Hangar (when docked at base) |
 | Mouse (click to capture) | Yaw / pitch |
-| Arrow keys | Pitch + yaw (alt) |
+| Arrow keys | Pitch + yaw alternate |
 | C | Camera toggle |
-| V | Cycle ship visual |
+| V | Cycle ship visual before a race |
 | P | Tuning panel |
 | G | Gamepad debug |
 | H | Hide / show controls |
 
-## Loop
+## Race save data
 
-1. Launch from base.
-2. Fly into the field. Mine by orbiting close (closer = faster, riskier).
-3. Watch energy. Boost only when it's worth it. Snag energy pickups.
-4. Avoid hostile patrol ships, or shoot them down for a small bank reward.
-5. Get back to base alive. Cargo deposits to your bank automatically.
-6. Open the hangar (Tab / Back) to swap parts. Better engines, bigger cargo
-   pods, real weapons. Parts cost from your bank; once owned, free to remount.
-7. Go deeper.
+`localStorage["slingshot.racing.save.v1"]` stores selected course, personal bests, split times, recent runs, and best-run ghost samples. `localStorage["slingshot.racing.playerName"]` stores the pilot name from the course screen.
 
-## Ship parts (V1)
+The leaderboard code uses a `LeaderboardProvider` interface. Without Supabase env vars, it stays local-only. With Supabase configured, the game fetches top shared runs per course, shows them on the course screen, and replays the fastest known run as the ghost.
 
-Ship visuals resolve in this order per spec
-(`docs/spec/ship-asset-pipeline.md`):
+## Supabase shared ghosts
 
-1. **Kit-built** — current player manifest, assembled from procedural part
-   primitives in `src/render/shipVisual/builtinParts.ts`. The hangar edits
-   this manifest.
-2. **Full-model GLB** — if a manifest's `fullModel` field points to a `.glb`
-   under `public/assets/ships/full-models/`, it is loaded and wrapped. Mounts
-   come from named empties (`mount.nose`, etc.) or from manifest coords.
-3. **Primitive fallback** — the four hand-coded variants in
-   `src/render/shipVisual/primitives.ts`. V key cycles between them.
+1. In Supabase SQL Editor, run `docs/supabase-racing.sql`.
+2. Copy `.env.example` to `.env.local`.
+3. Fill in:
 
-To add a new built-in part, append a `BuiltinPartDef` to the array in
-`src/render/shipVisual/builtinParts.ts`. The hangar UI picks it up
-automatically based on its `slot`.
+```sh
+VITE_SUPABASE_URL=https://edzpmcudhalajliacchq.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=your_publishable_or_anon_key
+VITE_SLINGSHOT_PLAYER_NAME=Your Pilot Name
+```
 
-## Save data
-
-`localStorage["slingshot.save.v1"]` holds bank, owned parts, the current
-manifest, and run stats. Bumping `SAVE_VERSION` in
-`src/game/persistence.ts` drops old saves on next boot.
+Use the publishable key or legacy anon key only. Never put a service-role or secret key in a Vite/browser env var.
 
 ## Hosting
 
-Built with Vite to a static bundle. Deploy `dist/` to GitHub Pages or any
-static host. The Rapier WASM file is bundled.
+Built with Vite to a static bundle. Deploy `dist/` to GitHub Pages or any static host. The Rapier WASM file is bundled.

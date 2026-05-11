@@ -95,3 +95,27 @@ Supersedes: none
 Decision: Hangar UI is a DOM overlay. Opening it freezes the player ship and short-circuits `tickPhysics`. Only valid while inside the base trigger sensor.
 Reason: A ship-builder mid-flight invites accidental triggers. Coupling it to docking matches the fiction ("dock at base"). DOM overlay avoids spinning a second 3D scene; a small Three.js renderer inside the overlay handles only the live preview.
 Supersedes: none
+
+## 2026-05-10 1755 - Racing branch uses standardized ordered circuits
+
+Decision: The `racing-time-trials` branch makes ordered checkpoint circuits the primary mode and keeps mining, combat, hangar upgrades, and cargo economy inactive in the entrypoint.
+Reason: Comparable time-trial runs need the same objective order, same ship baseline, and no economy or combat interruptions.
+Supersedes: none
+
+## 2026-05-10 1755 - Race leaderboards are local-first
+
+Decision: Store race bests, recent runs, splits, and ghosts in `localStorage["slingshot.racing.save.v1"]`, with a `LeaderboardProvider` interface and Supabase stub for later shared leaderboards.
+Reason: Local persistence makes the branch playable immediately without backend setup while preserving a clear remote-adapter boundary.
+Supersedes: none
+
+## 2026-05-10 1755 - Ghosts are fixed-interval transform samples
+
+Decision: Record previous-best ghosts as fixed-interval ship transform samples: race time, position, quaternion, speed, and checkpoint index.
+Reason: Transform playback is deterministic enough for visual racing, compact enough for localStorage, and does not touch physics or require input re-simulation.
+Supersedes: none
+
+## 2026-05-10 2131 - Deploy racing branch to GitHub Pages
+
+Decision: GitHub Pages deploys from pushes to `racing-time-trials` instead of `main`.
+Reason: `main` should remain available as its own development branch while the racing time-trials version is the public deployed build.
+Supersedes: 2026-05-08 2251 - Hosting: GitHub Pages via official Actions

@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import {
   type MaterialSet,
   addEngine,
-  addPlume,
   box,
   canopy,
   cone,
@@ -297,10 +296,9 @@ const PARTS: BuiltinPartDef[] = [
     cost: 220,
     description: 'Low-damage rapid pulses. Good against fast targets.',
     stats: { weaponDamage: 8, weaponRof: 4, weaponMuzzle: 720 },
-    build({ root, mats, thrusters }) {
+    build({ root, mats }) {
       box(root, [0.18, 0.16, 0.42], [-0.95, 0.04, -0.25], mats.darkPanel);
       cyl(root, 0.06, 0.62, [-0.95, 0.04, -0.55], mats.engine, 8);
-      addPlume(root, thrusters.main, [-0.95, 0.04, -0.85], [0, 0, -1], 0.04, 0.18, 0xff7a3a);
     },
   },
   {
@@ -310,10 +308,9 @@ const PARTS: BuiltinPartDef[] = [
     cost: 220,
     description: 'Low-damage rapid pulses. Good against fast targets.',
     stats: { weaponDamage: 8, weaponRof: 4, weaponMuzzle: 720 },
-    build({ root, mats, thrusters }) {
+    build({ root, mats }) {
       box(root, [0.18, 0.16, 0.42], [0.95, 0.04, -0.25], mats.darkPanel);
       cyl(root, 0.06, 0.62, [0.95, 0.04, -0.55], mats.engine, 8);
-      addPlume(root, thrusters.main, [0.95, 0.04, -0.85], [0, 0, -1], 0.04, 0.18, 0xff7a3a);
     },
   },
   {

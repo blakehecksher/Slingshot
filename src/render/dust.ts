@@ -13,7 +13,7 @@ export class SpaceDust {
   private count: number;
   private halfExtent: number;
 
-  constructor(scene: THREE.Scene, count = 6000, halfExtent = 80) {
+  constructor(scene: THREE.Scene, count = 3000, halfExtent = 80) {
     this.count = count;
     this.halfExtent = halfExtent;
     this.positions = new Float32Array(count * 3);

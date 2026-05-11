@@ -21,6 +21,10 @@ export interface ShipCommand {
   cycleShipVisual: boolean;
   toggleHangar: boolean;
   toggleLock: boolean;
+  restartRace: boolean;
+  startRace: boolean;
+  courseIndex: number | null;
+  courseDelta: number;
 }
 
 const DEADZONE = 0.12;
@@ -47,12 +51,16 @@ export class Input {
   private pendingShipCycle = false;
   private pendingHangarToggle = false;
   private pendingLockToggle = false;
+  private pendingRaceRestart = false;
+  private pendingRaceStart = false;
+  private pendingCourseIndex: number | null = null;
 
   // Previous gamepad button states, for edge detection.
   private prevPadButtons: boolean[] = [];
 
   constructor(canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (e) => {
+      if (isTextInputTarget(e.target)) return;
       // KeyC toggles camera; consume on first press only (no repeat fire).
       if (e.code === 'KeyC' && !e.repeat) this.pendingCameraToggle = true;
       if (e.code === 'KeyV' && !e.repeat) this.pendingShipCycle = true;
@@ -61,6 +69,11 @@ export class Input {
         if (e.code === 'Tab') e.preventDefault();
       }
       if (e.code === 'KeyL' && !e.repeat) this.pendingLockToggle = true;
+      if (e.code === 'KeyR' && !e.repeat) this.pendingRaceRestart = true;
+      if (e.code === 'Enter' && !e.repeat) this.pendingRaceStart = true;
+      if (e.code === 'Digit1' && !e.repeat) this.pendingCourseIndex = 0;
+      if (e.code === 'Digit2' && !e.repeat) this.pendingCourseIndex = 1;
+      if (e.code === 'Digit3' && !e.repeat) this.pendingCourseIndex = 2;
       this.keys.add(e.code);
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
         e.preventDefault();
@@ -122,12 +135,12 @@ export class Input {
   // Xbox standard mapping:
   //   L stick X (axis 0)         → roll
   //   L stick Y (axis 1)         → pitch (inverted: back = nose up)
-  //   R stick X (axis 2)         → camera yaw
-  //   R stick Y (axis 3)         → camera pitch
+  //   R stick X (axis 2)         → yaw / rudder
+  //   R stick Y (axis 3)         → vertical strafe
   //   LT (button 6, analog)      → reverse / brake
   //   RT (button 7, analog)      → forward thrust
-  //   LB (button 4)              → yaw right
-  //   RB (button 5)              → yaw left
+  //   LB (button 4)              → strafe left
+  //   RB (button 5)              → strafe right
   //   B  (button 1)              → boost (drains energy faster, more thrust)
   //   Y  (button 3)              → toggle camera mode
   //   D-pad up (12)              → strafe up
@@ -145,6 +158,10 @@ export class Input {
       cycleShipVisual: false,
       toggleHangar: false,
       toggleLock: false,
+      restartRace: false,
+      startRace: false,
+      courseIndex: null,
+      courseDelta: 0,
     };
 
     const pad = this.readGamepad();
@@ -154,11 +171,12 @@ export class Input {
       const rx = applyDeadzone(pad.axes[2] ?? 0);
       const ry = applyDeadzone(pad.axes[3] ?? 0);
 
-      // L stick: flight control. Right stick: camera look only.
+      // L stick: primary attitude. Right stick: rudder + lift trim for
+      // threading gates without taking pitch/roll off the left thumb.
       cmd.rotate.roll += lx;
       cmd.rotate.pitch += ly;
-      cmd.look.yaw += -rx;
-      cmd.look.pitch += -ry;
+      cmd.rotate.yaw += -rx;
+      cmd.thrust.y += -ry;
 
       // Triggers: forward (RT) / reverse (LT) thrust.
       const lt = pad.buttons[6]?.value ?? 0;
@@ -166,9 +184,9 @@ export class Input {
       cmd.thrust.z += -rt; // forward = -Z
       cmd.thrust.z += lt;  // reverse = +Z
 
-      // LB / RB: yaw rudder.
-      if (pad.buttons[4]?.pressed) cmd.rotate.yaw += 1;  // LB = yaw right
-      if (pad.buttons[5]?.pressed) cmd.rotate.yaw -= 1;  // RB = yaw left
+      // LB / RB: lateral thrusters for quick gate correction.
+      if (pad.buttons[4]?.pressed) cmd.thrust.x -= 1;  // LB = strafe left
+      if (pad.buttons[5]?.pressed) cmd.thrust.x += 1;  // RB = strafe right
 
       // D-pad: strafe (lateral + vertical thrust).
       if (pad.buttons[12]?.pressed) cmd.thrust.y += 1;  // up
@@ -191,8 +209,10 @@ export class Input {
       const xPressed = pad.buttons[2]?.pressed ?? false;
       if (xPressed && !this.prevPadButtons[2]) cmd.cycleShipVisual = true;
 
-      // A button (b0): fire weapon (held).
-      if (pad.buttons[0]?.pressed) cmd.fire = true;
+      // A button (b0): fire weapon (held) and menu confirm on edge.
+      const aPressed = pad.buttons[0]?.pressed ?? false;
+      if (aPressed) cmd.fire = true;
+      if (aPressed && !this.prevPadButtons[0]) cmd.startRace = true;
 
       // Back/Select (b8): camera toggle.
       const backPressed = pad.buttons[8]?.pressed ?? false;
@@ -203,6 +223,23 @@ export class Input {
       const r3Pressed = (pad.buttons[11]?.pressed ?? false) || (pad.buttons[10]?.pressed ?? false);
       const r3Prev = (this.prevPadButtons[11] ?? false) || (this.prevPadButtons[10] ?? false);
       if (r3Pressed && !r3Prev) cmd.toggleLock = true;
+
+      const startPressed = pad.buttons[9]?.pressed ?? false;
+      if (startPressed && !this.prevPadButtons[9]) {
+        cmd.restartRace = true;
+        cmd.startRace = true;
+      }
+
+      const dUpPressed = pad.buttons[12]?.pressed ?? false;
+      const dDownPressed = pad.buttons[13]?.pressed ?? false;
+      const dLeftPressed = pad.buttons[14]?.pressed ?? false;
+      const dRightPressed = pad.buttons[15]?.pressed ?? false;
+      if ((dUpPressed && !this.prevPadButtons[12]) || (dLeftPressed && !this.prevPadButtons[14])) {
+        cmd.courseDelta -= 1;
+      }
+      if ((dDownPressed && !this.prevPadButtons[13]) || (dRightPressed && !this.prevPadButtons[15])) {
+        cmd.courseDelta += 1;
+      }
 
       // Snapshot button states for next frame.
       this.prevPadButtons = pad.buttons.map((b) => b.pressed);
@@ -262,6 +299,18 @@ export class Input {
       cmd.toggleLock = true;
       this.pendingLockToggle = false;
     }
+    if (this.pendingRaceRestart) {
+      cmd.restartRace = true;
+      this.pendingRaceRestart = false;
+    }
+    if (this.pendingRaceStart) {
+      cmd.startRace = true;
+      this.pendingRaceStart = false;
+    }
+    if (this.pendingCourseIndex !== null) {
+      cmd.courseIndex = this.pendingCourseIndex;
+      this.pendingCourseIndex = null;
+    }
 
     cmd.thrust.x = clamp1(cmd.thrust.x);
     cmd.thrust.y = clamp1(cmd.thrust.y);
@@ -278,4 +327,10 @@ export class Input {
   isPointerLocked(): boolean {
     return this.pointerLocked;
   }
+}
+
+function isTextInputTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
 }
