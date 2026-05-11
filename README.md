@@ -88,3 +88,13 @@ Use the publishable key or legacy anon key only. Never put a service-role or sec
 ## Hosting
 
 Built with Vite to a static bundle. Deploy `dist/` to GitHub Pages or any static host. The Rapier WASM file is bundled.
+
+The GitHub Pages workflow expects these values before it builds:
+
+```sh
+VITE_SUPABASE_URL
+VITE_SUPABASE_PUBLISHABLE_KEY
+VITE_SLINGSHOT_PLAYER_NAME
+```
+
+Set `VITE_SUPABASE_URL` and optional `VITE_SLINGSHOT_PLAYER_NAME` as repository variables. Set `VITE_SUPABASE_PUBLISHABLE_KEY` as either a repository variable or secret. Without the Supabase URL/key at build time, Vite compiles the app into local-only mode and the public leaderboard cannot show shared top-10 standings.

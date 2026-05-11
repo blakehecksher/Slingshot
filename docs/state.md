@@ -1,9 +1,9 @@
 # State
-_Last updated: 2026-05-10 2333_
+_Last updated: 2026-05-10 2351_
 
 ## Current focus
 
-`racing-time-trials` branch implemented. Current focus is playtesting the racing cleanup/bug-kill pass in browser and on a physical controller.
+`racing-time-trials` branch implemented. Current focus is verifying the deployed Supabase-backed leaderboard and playtesting the racing cleanup/bug-kill pass in browser/on a physical controller.
 
 ## What's working
 
@@ -16,6 +16,9 @@ _Last updated: 2026-05-10 2333_
 - Race state covers select, countdown, racing, finished, and invalid/death states.
 - Personal bests, recent runs, splits, and ghosts persist under `localStorage["slingshot.racing.save.v1"]`.
 - If `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` are configured, the game fetches and submits shared course bests/ghosts through Supabase.
+- Supabase standings now fetch lightweight top-10 summary rows separately from the one top-run ghost payload.
+- Live Supabase read with the configured publishable key showed multiple visible rows, so the table/RLS are not limited to one record.
+- GitHub Pages build now fails loudly if the Supabase URL/key repository variable/secret is missing instead of silently deploying local-only leaderboard mode.
 - Start screen now presents courses plus a fixed-height top-10 leaderboard, with no local/Supabase setup language, medal targets, split chips, ghost-target block, or command footer.
 - The leaderboard top run is treated as the public ghost source when Supabase rows are available; the UI does not label ghosts or times as local.
 - Pilot name remains an editable input and finished runs submit with that name.
@@ -37,25 +40,26 @@ _Last updated: 2026-05-10 2333_
 
 ## In progress
 
-Racing cleanup bug-kill pass is implemented and build-clean. Local dev server is running at `http://127.0.0.1:5173/` for playtest.
+Supabase leaderboard repair is implemented and build-clean. Local dev server was previously running at `http://127.0.0.1:5173/` for playtest.
 
 ## Known issues
 
 - Build chunk > 500 kB warning remains (Three + Rapier WASM). Defer.
 - Favicon 404 remains cosmetic.
-- Supabase remote read is verified from `.env.local`; if another machine sees no entries, check that it has the same env vars and that Vite was restarted after editing `.env.local`.
+- Supabase remote read is verified from `.env.local`; deployed GitHub Pages also needs `VITE_SUPABASE_URL` as a repository variable and `VITE_SUPABASE_PUBLISHABLE_KEY` as a repository variable or secret before the workflow can build.
 - Existing mining/combat/hangar systems are not removed, only inactive in `src/main.ts` for this branch.
 
 ## Next actions
-1. Playtest start screen sizing and controller-help readability across all courses.
-2. Playtest LB/RB boost and D-pad strafing on a physical controller.
+1. Ensure GitHub config exists for `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, and optional `VITE_SLINGSHOT_PLAYER_NAME`.
+2. Push `racing-time-trials` and verify the Pages workflow builds/deploys with Supabase enabled.
 3. Finish a course in browser to verify Supabase standings refresh and that the top leaderboard run becomes the ghost.
-4. Playtest gate colors, dead-iron asteroid readability, countdown, and audio cutoff after wreck/reset/finish.
+4. Playtest start screen sizing, controller-help readability, LB/RB boost, and D-pad strafing on a physical controller.
 
 ## Active plan
-docs/plans/2026-05-10 2251 Plan - Racing cleanup bug kill.md
+docs/plans/2026-05-10 2351 Plan - Supabase leaderboard repair.md
 
 ## Recent logs
+- docs/log/2026-05-10 2351 Supabase leaderboard repair.md - verified live rows, split standings/ghost Supabase reads, required Pages Supabase env, and build-checked
 - docs/log/2026-05-10 2333 Gamepad help and bumper boost.md - reverted RB strafe mode, mapped both bumpers to boost, added start-screen controller help, and build-checked
 - docs/log/2026-05-10 2258 Racing cleanup bug kill.md - simplified public racing UI, remapped controls, updated gates/asteroids/audio/countdown/thrust visuals, and build-checked
 - docs/log/2026-05-10 2150 Racing cleanup.md - removed station spawn, confined boost plumes to rear engines, changed gate guidance to blue opacity steps, and build-checked

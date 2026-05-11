@@ -27,7 +27,17 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run build
+      - name: Build
+        run: |
+          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_PUBLISHABLE_KEY" ]; then
+            echo "::error::GitHub Pages builds need VITE_SUPABASE_URL as a repository variable and VITE_SUPABASE_PUBLISHABLE_KEY as a repository variable or secret."
+            exit 1
+          fi
+          npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY || vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          VITE_SLINGSHOT_PLAYER_NAME: ${{ vars.VITE_SLINGSHOT_PLAYER_NAME || 'Anonymous Pilot' }}
 
       - uses: actions/configure-pages@v5
 

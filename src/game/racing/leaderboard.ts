@@ -76,8 +76,11 @@ interface SupabaseRaceRow {
   player_name: string;
   time_sec: number;
   splits: number[];
-  ghost: GhostRun;
   created_at?: string;
+}
+
+interface SupabaseRaceGhostRow extends SupabaseRaceRow {
+  ghost: GhostRun;
 }
 
 function emptySave(): RacingSaveData {
@@ -287,10 +290,13 @@ export class SupabaseLeaderboardProvider extends LocalLeaderboardProvider {
 
   override async refreshCourse(courseId: string): Promise<CourseRecord | null> {
     try {
-      const rows = await this.fetchLeaderboard(courseId, REMOTE_LEADERBOARD_LIMIT);
+      const [rows, topRun] = await Promise.all([
+        this.fetchLeaderboard(courseId, REMOTE_LEADERBOARD_LIMIT),
+        this.fetchTopRun(courseId),
+      ]);
       this.lastRemoteError = null;
       this.entries = { ...this.entries, [courseId]: rows.map(rowToEntry) };
-      const row = rows[0];
+      const row = topRun ?? null;
       if (!row) return this.getRecord(courseId);
       const existing = this.getRecord(courseId);
       const record = recordFromRun(row.ghost, existing?.recentRuns ?? [], 'supabase', row.player_name);
@@ -311,10 +317,13 @@ export class SupabaseLeaderboardProvider extends LocalLeaderboardProvider {
 
     try {
       await this.insertRun(sanitized);
-      const rows = await this.fetchLeaderboard(sanitized.courseId, REMOTE_LEADERBOARD_LIMIT);
+      const [rows, topRun] = await Promise.all([
+        this.fetchLeaderboard(sanitized.courseId, REMOTE_LEADERBOARD_LIMIT),
+        this.fetchTopRun(sanitized.courseId),
+      ]);
       this.lastRemoteError = null;
       this.entries = { ...this.entries, [sanitized.courseId]: rows.map(rowToEntry) };
-      const row = rows[0];
+      const row = topRun ?? null;
       if (row) {
         const existing = this.getRecord(sanitized.courseId);
         const record = recordFromRun(row.ghost, existing?.recentRuns ?? [], 'supabase', row.player_name);
@@ -352,14 +361,24 @@ export class SupabaseLeaderboardProvider extends LocalLeaderboardProvider {
   private async fetchLeaderboard(courseId: string, limit: number): Promise<SupabaseRaceRow[]> {
     const url = new URL(`${this.config.url}/rest/v1/race_leaderboard`);
     url.searchParams.set('course_id', `eq.${courseId}`);
-    url.searchParams.set('select', 'id,course_id,player_name,time_sec,splits,ghost,created_at');
+    url.searchParams.set('select', 'id,course_id,player_name,time_sec,splits,created_at');
     url.searchParams.set('order', 'time_sec.asc,created_at.asc');
     url.searchParams.set('limit', String(limit));
     return this.request<SupabaseRaceRow[]>(url.toString(), { method: 'GET' });
   }
 
+  private async fetchTopRun(courseId: string): Promise<SupabaseRaceGhostRow | null> {
+    const url = new URL(`${this.config.url}/rest/v1/race_leaderboard`);
+    url.searchParams.set('course_id', `eq.${courseId}`);
+    url.searchParams.set('select', 'id,course_id,player_name,time_sec,splits,ghost,created_at');
+    url.searchParams.set('order', 'time_sec.asc,created_at.asc');
+    url.searchParams.set('limit', '1');
+    const rows = await this.request<SupabaseRaceGhostRow[]>(url.toString(), { method: 'GET' });
+    return rows[0] ?? null;
+  }
+
   private async insertRun(run: GhostRun): Promise<void> {
-    const row: SupabaseRaceRow = {
+    const row: SupabaseRaceGhostRow = {
       course_id: run.courseId,
       player_name: this.config.playerName,
       time_sec: run.timeSec,
