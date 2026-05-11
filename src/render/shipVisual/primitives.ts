@@ -188,6 +188,21 @@ export function addManeuverThrusters(root: THREE.Object3D, thrusters: ThrusterSe
   addPlume(root, thrusters.strafeUp, [0.42, 0.48, 0.72], [0, 1, 0], 0.08, 0.5, 0x7dffb2);
   addPlume(root, thrusters.strafeDown, [-0.42, -0.48, 0.72], [0, -1, 0], 0.08, 0.5, 0x7dffb2);
   addPlume(root, thrusters.strafeDown, [0.42, -0.48, 0.72], [0, -1, 0], 0.08, 0.5, 0x7dffb2);
+
+  addPlume(root, thrusters.pitchUp, [-0.34, -0.46, -1.18], [0, -1, 0], 0.07, 0.42, 0xffd06a);
+  addPlume(root, thrusters.pitchUp, [0.34, -0.46, -1.18], [0, -1, 0], 0.07, 0.42, 0xffd06a);
+  addPlume(root, thrusters.pitchDown, [-0.34, 0.48, -1.18], [0, 1, 0], 0.07, 0.42, 0xffd06a);
+  addPlume(root, thrusters.pitchDown, [0.34, 0.48, -1.18], [0, 1, 0], 0.07, 0.42, 0xffd06a);
+
+  addPlume(root, thrusters.yawLeft, [0.82, 0.04, -1.08], [1, 0, 0], 0.07, 0.44, 0xffd06a);
+  addPlume(root, thrusters.yawLeft, [-0.82, 0.02, 1.08], [-1, 0, 0], 0.07, 0.44, 0xffd06a);
+  addPlume(root, thrusters.yawRight, [-0.82, 0.04, -1.08], [-1, 0, 0], 0.07, 0.44, 0xffd06a);
+  addPlume(root, thrusters.yawRight, [0.82, 0.02, 1.08], [1, 0, 0], 0.07, 0.44, 0xffd06a);
+
+  addPlume(root, thrusters.rollLeft, [-0.95, 0.42, 0.46], [0, 1, 0], 0.06, 0.38, 0xffd06a);
+  addPlume(root, thrusters.rollLeft, [0.95, -0.42, 0.46], [0, -1, 0], 0.06, 0.38, 0xffd06a);
+  addPlume(root, thrusters.rollRight, [-0.95, -0.42, 0.46], [0, -1, 0], 0.06, 0.38, 0xffd06a);
+  addPlume(root, thrusters.rollRight, [0.95, 0.42, 0.46], [0, 1, 0], 0.06, 0.38, 0xffd06a);
 }
 
 export function finishShip(root: THREE.Object3D, thrusters: ThrusterSet): BuiltShip {

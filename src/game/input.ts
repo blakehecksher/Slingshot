@@ -11,8 +11,7 @@ export interface ShipCommand {
   // Free-look orbit input for the camera. Rotates the chase-cam offset
   // around the ship; does NOT change ship orientation. [-1, 1].
   look: { yaw: number; pitch: number };
-  // Boost intensity [0, 1]. Multiplies forward thrust and energy drain.
-  // Gamepad can trigger this with B, or by pulling RT into its top range.
+  // Boost intensity [0, 1]. Multiplies thrust and energy drain.
   boost: number;
   // Hold-fire weapon trigger.
   fire: boolean;
@@ -139,9 +138,7 @@ export class Input {
   //   R stick Y (axis 3)         → vertical strafe
   //   LT (button 6, analog)      → reverse / brake
   //   RT (button 7, analog)      → forward thrust
-  //   LB (button 4)              → strafe left
-  //   RB (button 5)              → strafe right
-  //   B  (button 1)              → boost (drains energy faster, more thrust)
+  //   LB/RB (buttons 4/5)        → boost (drains energy faster, more thrust)
   //   Y  (button 3)              → toggle camera mode
   //   D-pad up (12)              → strafe up
   //   D-pad down (13)            → strafe down
@@ -184,20 +181,17 @@ export class Input {
       cmd.thrust.z += -rt; // forward = -Z
       cmd.thrust.z += lt;  // reverse = +Z
 
-      // LB / RB: lateral thrusters for quick gate correction.
-      if (pad.buttons[4]?.pressed) cmd.thrust.x -= 1;  // LB = strafe left
-      if (pad.buttons[5]?.pressed) cmd.thrust.x += 1;  // RB = strafe right
-
       // D-pad: strafe (lateral + vertical thrust).
       if (pad.buttons[12]?.pressed) cmd.thrust.y += 1;  // up
       if (pad.buttons[13]?.pressed) cmd.thrust.y -= 1;  // down
       if (pad.buttons[14]?.pressed) cmd.thrust.x -= 1;  // left
       if (pad.buttons[15]?.pressed) cmd.thrust.x += 1;  // right
 
-      // Boost: B button only. (RT is forward thrust and never drains energy.)
+      // Boost: either bumper. (RT is forward thrust and never drains energy by itself.)
       cmd.boost = Math.max(
         cmd.boost,
-        pad.buttons[1]?.value ?? (pad.buttons[1]?.pressed ? 1 : 0),
+        pad.buttons[4]?.value ?? (pad.buttons[4]?.pressed ? 1 : 0),
+        pad.buttons[5]?.value ?? (pad.buttons[5]?.pressed ? 1 : 0),
       );
 
       // Y button (b3): hangar open/close (edge-triggered). Inside the

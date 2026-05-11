@@ -186,6 +186,21 @@ export class GameAudio {
     }
   }
 
+  silence(): void {
+    if (this.rumble) {
+      this.rumble.currentVolume = 0;
+      this.rumble.gain.gain.value = 0;
+    }
+    if (this.creak) {
+      this.creak.currentVolume = 0;
+      this.creak.gain.gain.value = 0;
+    }
+    if (this.cargoHum) {
+      this.cargoHum.current = 0;
+      this.cargoHum.gain.gain.value = 0;
+    }
+  }
+
   // ----- One-shot SFX synthesizers. Chosen to be cheap, distinct, and
   // tonally consistent with the existing rumble/creak palette.
 

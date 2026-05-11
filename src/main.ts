@@ -11,7 +11,7 @@ import { Ship, SHIP_TUNING } from './game/ship';
 import { predictTrajectory, type Trajectory } from './game/trajectory';
 import { computeModsFromParts, defaultManifest } from './game/upgrades';
 import { CheckpointSystem } from './game/racing/checkpoints';
-import { RACE_ASTEROID_DEFAULTS, RACE_COURSES, medalFor, type RaceCourse } from './game/racing/courses';
+import { RACE_ASTEROID_DEFAULTS, RACE_COURSES, type RaceCourse } from './game/racing/courses';
 import { GhostRecorder, GhostReplay } from './game/racing/ghost';
 import { createLeaderboardProvider, type CourseRecord, type RaceLeaderboardEntry } from './game/racing/leaderboard';
 import { formatDelta, formatRaceTime, RaceManager } from './game/racing/raceManager';
@@ -96,6 +96,7 @@ void resolveAndSwapShipVisual();
 const lifecycle = new Lifecycle(ship, selectedCourse.startPosition, {
   onDeath: () => {
     audio.destroy();
+    audio.silence();
     ghostRecorder.reset();
     race.invalidate('SHIP LOST');
     showToast('RUN INVALIDATED  -  ship lost', 1800);
@@ -105,6 +106,7 @@ const lifecycle = new Lifecycle(ship, selectedCourse.startPosition, {
     energy.refill();
     ship.refillHp();
     ship.setFrozen(true);
+    audio.silence();
     peakSpeed = 0;
     hasPrevVelocity = false;
   },
@@ -137,10 +139,11 @@ let currentZone: FieldZone = 'open';
 let peakSpeed = 0;
 let accelMag = 0;
 let hasPrevVelocity = false;
-let controlsVisible = true;
+let panelsVisible = false;
 let padDebugVisible = false;
 let finishMessage = '';
 let leaderboardRefreshSeq = 0;
+let goOverlayTimer = 0;
 
 const shipQuat = new THREE.Quaternion();
 const tmpQuat = new THREE.Quaternion();
@@ -159,24 +162,39 @@ const ringTargetProj = new THREE.Vector3();
 const cameraRight = new THREE.Vector3();
 const cameraUp = new THREE.Vector3();
 const cameraForward = new THREE.Vector3();
+const trajectoryStart = new THREE.Vector3();
 
 const coursePanel = document.createElement('div');
 coursePanel.id = 'course-select';
 document.body.appendChild(coursePanel);
+const countdownOverlay = document.createElement('div');
+countdownOverlay.id = 'race-countdown';
+document.body.appendChild(countdownOverlay);
 const ringTracker = createRingTracker();
 injectRaceStyles();
 renderControls();
+controls.style.display = 'none';
+hud.style.display = 'none';
+padDebug.style.display = 'none';
 prepareCourse(selectedCourse);
 renderCourseSelect('Choose a league course, then press Enter or Start Race.');
 
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyH' && !e.repeat) {
-    controlsVisible = !controlsVisible;
-    controls.style.display = controlsVisible ? '' : 'none';
+    panelsVisible = !panelsVisible;
+    controls.style.display = panelsVisible ? '' : 'none';
+    hud.style.display = panelsVisible ? '' : 'none';
+    padDebug.style.display = panelsVisible && padDebugVisible ? '' : 'none';
+  }
+  if (e.code === 'KeyO' && !e.repeat) {
+    panelsVisible = !panelsVisible;
+    controls.style.display = panelsVisible ? '' : 'none';
+    hud.style.display = panelsVisible ? '' : 'none';
+    padDebug.style.display = panelsVisible && padDebugVisible ? '' : 'none';
   }
   if (e.code === 'KeyG' && !e.repeat) {
     padDebugVisible = !padDebugVisible;
-    padDebug.style.display = padDebugVisible ? '' : 'none';
+    padDebug.style.display = panelsVisible && padDebugVisible ? '' : 'none';
   }
 });
 
@@ -211,6 +229,7 @@ function prepareCourse(course: RaceCourse): void {
   ship.setFrozen(true);
   ship.refillHp();
   energy.refill();
+  audio.silence();
   peakSpeed = 0;
   accelMag = 0;
   hasPrevVelocity = false;
@@ -231,6 +250,7 @@ function selectCourse(index: number): void {
 function startRace(): void {
   prepareCourse(selectedCourse);
   race.start(selectedCourse);
+  goOverlayTimer = 0;
   ghostRecorder.reset();
   ghostReplay.setRun(leaderboard.getRecord(selectedCourse.id)?.bestGhost ?? null);
   coursePanel.style.display = 'none';
@@ -241,17 +261,17 @@ async function finishRace(): Promise<void> {
   const finish = race.finish;
   if (!finish) return;
   ship.setFrozen(true);
+  audio.silence();
   const run = ghostRecorder.complete(finish.courseId, finish.timeSec, finish.splits, ship, race.nextCheckpoint);
   const result = await leaderboard.submitRun(run);
-  const medal = medalFor(finish.timeSec, selectedCourse.medals).toUpperCase();
   const best = result.record.bestTimeSec;
   const delta = finish.timeSec - best;
   const remote = result.isGlobalBest
-    ? ' - global best'
+    ? ' - leaderboard best'
     : result.remoteError
-      ? ` - local saved, remote failed: ${shortError(result.remoteError)}`
+      ? ` - leaderboard update failed: ${shortError(result.remoteError)}`
       : '';
-  finishMessage = `${medal} finish ${formatRaceTime(finish.timeSec)}${result.isPersonalBest ? ' - personal best' : ` (${formatDelta(delta)} vs best)`}${remote}`;
+  finishMessage = `Finish ${formatRaceTime(finish.timeSec)}${result.isPersonalBest ? ' - best run' : ` (${formatDelta(delta)} vs best)`}${remote}`;
   ghostReplay.setRun(result.record.bestGhost);
   showToast(finishMessage, 3000);
   renderCourseSelect(finishMessage, result.record);
@@ -317,6 +337,7 @@ function tickPhysics(): void {
   const raceEvent = race.update(FIXED_DT);
   if (raceEvent.started) {
     ship.setFrozen(false);
+    goOverlayTimer = 0.75;
     showToast('GO', 700);
   }
 
@@ -336,8 +357,8 @@ function tickPhysics(): void {
   ship.applyAcceleration(gravitySample.acceleration, FIXED_DT);
 
   const boost = Math.max(0, Math.min(1, cmd.boost));
-  const forwardThrust = Math.max(0, -cmd.thrust.z);
-  const drainMag = boost * forwardThrust * SHIP_TUNING.BOOST_ENERGY_MULT;
+  const thrustDemand = Math.max(Math.abs(cmd.thrust.x), Math.abs(cmd.thrust.y), Math.abs(cmd.thrust.z));
+  const drainMag = boost * thrustDemand * SHIP_TUNING.BOOST_ENERGY_MULT;
   const thrustScale = energy.tick(drainMag, FIXED_DT);
   ship.setThrustScale(thrustScale);
   ship.applyCommand(cmd, FIXED_DT);
@@ -410,7 +431,8 @@ function render(): void {
   ship.syncMeshFromBody();
   dust.update(ship.position);
   trajectory = predictTrajectory(ship.position, ship.linearVelocity, asteroidField.asteroids);
-  trajectoryRibbon.update(trajectory);
+  trajectoryStart.set(0, 0, -2.8).applyQuaternion(ship.mesh.quaternion).add(ship.mesh.position);
+  trajectoryRibbon.update(trajectory, trajectoryStart);
   syncCamera();
   updateRingTracker();
   feedback.apply(camera);
@@ -427,7 +449,7 @@ function render(): void {
   });
   minimap.render(renderer);
   fadeOverlay.style.opacity = String(lifecycle.fadeAlpha);
-  if (padDebugVisible) renderPadDebug();
+  if (panelsVisible && padDebugVisible) renderPadDebug();
 }
 
 let accumulator = 0;
@@ -450,8 +472,10 @@ function loop(nowMs: number): void {
   if (steps === MAX_STEPS_PER_FRAME) accumulator = 0;
 
   render();
-  audio.update(gravitySample.strongestPull, gravitySample.closestClearance, frameDt, 0);
+  if (race.state === 'racing') audio.update(gravitySample.strongestPull, gravitySample.closestClearance, frameDt, 0);
+  else audio.update(0, Number.POSITIVE_INFINITY, frameDt, 0);
   tickToast(frameDt);
+  updateCountdownOverlay(frameDt);
   updateStatus();
   tuningPanel.update({
     fps,
@@ -490,8 +514,7 @@ function loop(nowMs: number): void {
 
 function updateStatus(): void {
   const record = leaderboard.getRecord(selectedCourse.id);
-  const bestSource = record?.source === 'supabase' ? 'GLOBAL' : 'LOCAL';
-  const best = record ? `${bestSource} ${formatRaceTime(record.bestTimeSec)}` : '--:--.---';
+  const best = record ? formatRaceTime(record.bestTimeSec) : '--:--.---';
   const ePct = Math.round(energy.fraction * 100);
   const energyBar = bar(energy.fraction, 14);
   const hpBar = bar(ship.hpFraction, 10);
@@ -511,8 +534,21 @@ function updateStatus(): void {
     <div class="line"><b>GATE</b> ${Math.min(race.nextCheckpoint + 1, selectedCourse.gates.length)} / ${selectedCourse.gates.length} ${splitDelta ? `<span class="reserve">${splitDelta}</span>` : ''}</div>
     <div class="line"><b>ENERGY</b> ${energyBar} ${ePct}%</div>
     <div class="line"><b>HULL</b> ${hpBar} ${Math.round(ship.hp)} / ${Math.round(ship.hpMax)}</div>
-    <div class="line"><b>STATE</b> ${stateLine} <span class="mining">R/Start restart</span></div>
+    <div class="line"><b>STATE</b> ${stateLine}</div>
   `;
+}
+
+function updateCountdownOverlay(dt: number): void {
+  let text = '';
+  if (race.state === 'countdown') {
+    text = String(Math.max(1, Math.ceil(race.countdownSec)));
+  } else if (goOverlayTimer > 0) {
+    text = 'GO';
+    goOverlayTimer = Math.max(0, goOverlayTimer - dt);
+  }
+
+  countdownOverlay.textContent = text;
+  countdownOverlay.classList.toggle('visible', text.length > 0);
 }
 
 function renderPadDebug(): void {
@@ -528,9 +564,9 @@ function renderControls(): void {
   controls.innerHTML = `
     <h3>SLINGSHOT LEAGUE</h3>
     <div class="row"><b>Gamepad</b> L stick pitch/roll, R stick yaw/up-down</div>
-    <div class="row"><b>Gamepad</b> LB/RB strafe left/right</div>
-    <div class="row"><b>Gamepad</b> RT/LT thrust/brake, B boost</div>
-    <div class="row"><b>Gamepad</b> D-pad choose/strafe, A start, Start restart</div>
+    <div class="row"><b>Gamepad</b> D-pad strafe</div>
+    <div class="row"><b>Gamepad</b> RT/LT thrust/reverse, LB/RB boost</div>
+    <div class="row"><b>Gamepad</b> A start, Start restart</div>
     <div class="row"><b>Enter</b> start selected course</div>
     <div class="row"><b>1 / 2 / 3</b> choose course</div>
     <div class="row"><b>R</b> restart run</div>
@@ -539,7 +575,7 @@ function renderControls(): void {
     <div class="row"><b>Space/Ctrl</b> strafe up/down</div>
     <div class="row"><b>Shift</b> boost</div>
     <div class="row"><b>C</b> camera, <b>V</b> ship visual</div>
-    <div class="row"><b>P</b> tuning, <b>G</b> pad debug, <b>H</b> hide</div>
+    <div class="row"><b>P</b> tuning, <b>O</b> panels, <b>G</b> pad debug</div>
   `;
 }
 
@@ -547,37 +583,34 @@ function renderCourseSelect(message: string, recordOverride?: CourseRecord): voi
   const record = recordOverride ?? leaderboard.getRecord(selectedCourse.id);
   const entries = leaderboard.getCourseEntries(selectedCourse.id);
   const remoteError = leaderboard.getLastRemoteError();
-  const remoteStatus = leaderboard.isRemoteEnabled()
-    ? remoteError
-      ? `Supabase issue: ${shortError(remoteError)}`
-      : entries.some((entry) => entry.source === 'supabase')
-        ? 'Supabase connected'
-        : 'Supabase connected - no global runs yet'
-    : 'Local only - configure Supabase env vars for shared ghosts';
+  const remoteStatus = remoteError ? `Leaderboard issue: ${shortError(remoteError)}` : 'Leaderboard';
   const rows = RACE_COURSES.map((course, index) => {
     const r = leaderboard.getRecord(course.id);
     const selected = course.id === selectedCourse.id ? ' selected' : '';
-    const source = r?.source === 'supabase' ? 'Global' : 'Local';
     return `<button class="course-button${selected}" data-course="${index}">
       <span class="course-number">${String(index + 1).padStart(2, '0')}</span>
       <span class="course-main">
         <strong>${escapeHtml(course.name)}</strong>
         <small>${escapeHtml(course.summary)}</small>
         <span class="course-meta">
-          <em>${source} ${r ? formatRaceTime(r.bestTimeSec) : '--:--.---'}${r?.playerName ? ` / ${escapeHtml(r.playerName)}` : ''}</em>
+          <em>${r ? formatRaceTime(r.bestTimeSec) : '--:--.---'}${r?.playerName ? ` / ${escapeHtml(r.playerName)}` : ''}</em>
           <em>${course.gates.length} gates</em>
-          <em>Gold ${formatRaceTime(course.medals.gold)}</em>
         </span>
       </span>
     </button>`;
   }).join('');
-  const splits = record
-    ? record.bestSplits.map((s, i) => `<span><b>S${i + 1}</b>${formatRaceTime(s)}</span>`).join('')
-    : '<span>No completed run yet.</span>';
   const standings = renderLeaderboardEntries(entries);
-  const ghostLabel = record
-    ? `${record.source === 'supabase' ? 'Global' : 'Local'} ghost: ${formatRaceTime(record.bestTimeSec)}${record.playerName ? ` by ${escapeHtml(record.playerName)}` : ''}`
-    : 'No ghost available yet.';
+  const leader = entries[0] ?? (record ? {
+    rank: 1,
+    courseId: record.courseId,
+    timeSec: record.bestTimeSec,
+    splits: record.bestSplits,
+    completedAt: record.recentRuns[0]?.completedAt ?? '',
+    playerName: record.playerName,
+  } : null);
+  const leaderText = leader
+    ? `#1 ${formatRaceTime(leader.timeSec)}${leader.playerName ? ` by ${escapeHtml(leader.playerName)}` : ''}`
+    : 'Awaiting first run';
   coursePanel.innerHTML = `
     <div class="course-card" role="dialog" aria-label="Race course select">
       <div class="course-header">
@@ -599,34 +632,32 @@ function renderCourseSelect(message: string, recordOverride?: CourseRecord): voi
             <span>${RACE_COURSES.length} live circuits</span>
           </div>
           <div class="course-grid">${rows}</div>
+          <div class="controller-help" aria-label="Gamepad controls">
+            <div class="section-title">
+              <h2>Controller</h2>
+              <span>Standard gamepad</span>
+            </div>
+            <div class="control-map">
+              <span><b>LS</b> pitch / roll</span>
+              <span><b>RS</b> yaw / vertical strafe</span>
+              <span><b>RT</b> thrust</span>
+              <span><b>LT</b> reverse</span>
+              <span><b>LB/RB</b> boost</span>
+              <span><b>D-pad</b> strafe / select</span>
+              <span><b>A</b> start</span>
+              <span><b>Start</b> restart</span>
+            </div>
+          </div>
         </section>
-        <section class="race-panel" aria-label="Leaderboard and ghost target">
+        <section class="race-panel" aria-label="Leaderboard">
           <div class="section-title">
             <h2>Leaderboard</h2>
-            <span>${entries.length ? 'Best shared runs' : 'Awaiting first run'}</span>
+            <span>${leaderText}</span>
           </div>
           ${standings}
-          <div class="target-panel">
-            <div class="section-title">
-              <h2>Ghost Target</h2>
-              <span>${record ? 'Replay armed' : 'No replay'}</span>
-            </div>
-            <div class="ghost-target">${ghostLabel}</div>
-            <div class="splits">${splits}</div>
-          </div>
-          <div class="medal-strip" aria-label="Medal times">
-            <span><b>Gold</b>${formatRaceTime(selectedCourse.medals.gold)}</span>
-            <span><b>Silver</b>${formatRaceTime(selectedCourse.medals.silver)}</span>
-            <span><b>Bronze</b>${formatRaceTime(selectedCourse.medals.bronze)}</span>
-          </div>
         </section>
       </div>
       <div class="course-footer">
-        <div class="command-strip">
-          <span>Enter / A</span>
-          <span>D-pad / 1-3</span>
-          <span>R / Start</span>
-        </div>
         <div class="course-actions">
           <button id="restart-race" class="secondary-action">Reset Ship</button>
           <button id="start-race" class="primary-action">Start Race</button>
@@ -657,8 +688,8 @@ function renderCourseSelect(message: string, recordOverride?: CourseRecord): voi
 }
 
 function renderLeaderboardEntries(entries: readonly RaceLeaderboardEntry[]): string {
-  if (entries.length === 0) return '<div class="empty-standings">No shared runs for this course yet.</div>';
-  return `<ol class="leaderboard">${entries.map((entry) => `
+  if (entries.length === 0) return '<div class="empty-standings">No runs for this course yet.</div>';
+  return `<ol class="leaderboard">${entries.slice(0, 10).map((entry) => `
     <li>
       <span>#${entry.rank}</span>
       <b>${formatRaceTime(entry.timeSec)}</b>
@@ -686,6 +717,7 @@ function injectRaceStyles(): void {
     }
     #course-select .course-card {
       width: min(1100px, 100%);
+      min-height: min(760px, calc(100vh - 52px));
       max-height: calc(100vh - 52px);
       overflow: auto;
       border: 1px solid rgba(121, 225, 214, 0.42);
@@ -760,6 +792,34 @@ function injectRaceStyles(): void {
     #course-select .course-grid {
       display: grid;
       gap: 10px;
+    }
+    #course-select .controller-help {
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(121, 225, 214, 0.16);
+    }
+    #course-select .control-map {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    #course-select .control-map span {
+      min-height: 30px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(121, 225, 214, 0.16);
+      background: rgba(6, 10, 14, 0.42);
+      color: #c8c3b7;
+      font-size: 12px;
+      line-height: 1.15;
+      padding: 7px 9px;
+      box-sizing: border-box;
+    }
+    #course-select .control-map b {
+      color: #79e1d6;
+      font-weight: 900;
+      min-width: 46px;
     }
     #course-select button {
       font: inherit;
@@ -869,6 +929,8 @@ function injectRaceStyles(): void {
       display: grid;
       gap: 7px;
       font-size: 13px;
+      min-height: 410px;
+      align-content: start;
     }
     #course-select .leaderboard li {
       display: grid;
@@ -894,7 +956,8 @@ function injectRaceStyles(): void {
       color: #c8c3b7;
       font-size: 13px;
       line-height: 1.45;
-      min-height: 20px;
+      min-height: 410px;
+      box-sizing: border-box;
       border: 1px solid rgba(255, 255, 255, 0.06);
       background: rgba(255, 255, 255, 0.035);
       padding: 12px;
@@ -927,8 +990,8 @@ function injectRaceStyles(): void {
       text-align: center;
     }
     #course-select .course-footer {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      display: flex;
+      justify-content: flex-end;
       gap: 14px;
       align-items: center;
       margin-top: 18px;
@@ -971,6 +1034,7 @@ function injectRaceStyles(): void {
         place-items: start center;
       }
       #course-select .course-card {
+        min-height: min(760px, calc(100vh - 28px));
         max-height: calc(100vh - 28px);
         padding: 16px;
       }
@@ -988,6 +1052,9 @@ function injectRaceStyles(): void {
       }
       #course-select .course-actions button {
         min-width: 0;
+      }
+      #course-select .control-map {
+        grid-template-columns: 1fr;
       }
     }
     @media (max-width: 560px) {
@@ -1013,6 +1080,28 @@ function injectRaceStyles(): void {
       #course-select .pilot-row span {
         grid-column: 1;
       }
+    }
+    #race-countdown {
+      position: fixed;
+      inset: 0;
+      z-index: 46;
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+      opacity: 0;
+      color: #fff8e8;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: clamp(72px, 18vw, 210px);
+      line-height: 1;
+      font-weight: 950;
+      letter-spacing: 0;
+      text-shadow: 0 8px 32px rgba(0, 0, 0, 0.72), 0 0 34px rgba(93, 255, 154, 0.42);
+      transition: opacity 0.08s linear, transform 0.08s linear;
+      transform: scale(0.96);
+    }
+    #race-countdown.visible {
+      opacity: 1;
+      transform: scale(1);
     }
   `;
   document.head.appendChild(style);
@@ -1120,7 +1209,7 @@ function injectRingTrackerStyles(): void {
       right: 0;
       height: 18vh;
       opacity: var(--ring-top);
-      background: radial-gradient(ellipse at top center, rgba(74, 163, 255, 0.62), rgba(74, 163, 255, 0.18) 38%, rgba(74, 163, 255, 0) 74%);
+      background: radial-gradient(ellipse at top center, rgba(93, 255, 154, 0.62), rgba(93, 255, 154, 0.18) 38%, rgba(93, 255, 154, 0) 74%);
     }
     #ring-tracker .right {
       top: 0;
@@ -1128,7 +1217,7 @@ function injectRingTrackerStyles(): void {
       bottom: 0;
       width: 18vw;
       opacity: var(--ring-right);
-      background: radial-gradient(ellipse at right center, rgba(74, 163, 255, 0.62), rgba(74, 163, 255, 0.18) 38%, rgba(74, 163, 255, 0) 74%);
+      background: radial-gradient(ellipse at right center, rgba(93, 255, 154, 0.62), rgba(93, 255, 154, 0.18) 38%, rgba(93, 255, 154, 0) 74%);
     }
     #ring-tracker .bottom {
       left: 0;
@@ -1136,7 +1225,7 @@ function injectRingTrackerStyles(): void {
       bottom: 0;
       height: 18vh;
       opacity: var(--ring-bottom);
-      background: radial-gradient(ellipse at bottom center, rgba(74, 163, 255, 0.62), rgba(74, 163, 255, 0.18) 38%, rgba(74, 163, 255, 0) 74%);
+      background: radial-gradient(ellipse at bottom center, rgba(93, 255, 154, 0.62), rgba(93, 255, 154, 0.18) 38%, rgba(93, 255, 154, 0) 74%);
     }
     #ring-tracker .left {
       top: 0;
@@ -1144,7 +1233,7 @@ function injectRingTrackerStyles(): void {
       bottom: 0;
       width: 18vw;
       opacity: var(--ring-left);
-      background: radial-gradient(ellipse at left center, rgba(74, 163, 255, 0.62), rgba(74, 163, 255, 0.18) 38%, rgba(74, 163, 255, 0) 74%);
+      background: radial-gradient(ellipse at left center, rgba(93, 255, 154, 0.62), rgba(93, 255, 154, 0.18) 38%, rgba(93, 255, 154, 0) 74%);
     }
   `;
   document.head.appendChild(style);

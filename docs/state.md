@@ -1,9 +1,9 @@
 # State
-_Last updated: 2026-05-10 2150_
+_Last updated: 2026-05-10 2333_
 
 ## Current focus
 
-`racing-time-trials` branch implemented. Current focus is deploying this racing branch through GitHub Pages while leaving `main` as a separate development branch, plus playtesting checkpoint guidance readability.
+`racing-time-trials` branch implemented. Current focus is playtesting the racing cleanup/bug-kill pass in browser and on a physical controller.
 
 ## What's working
 
@@ -16,31 +16,28 @@ _Last updated: 2026-05-10 2150_
 - Race state covers select, countdown, racing, finished, and invalid/death states.
 - Personal bests, recent runs, splits, and ghosts persist under `localStorage["slingshot.racing.save.v1"]`.
 - If `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` are configured, the game fetches and submits shared course bests/ghosts through Supabase.
-- Course select includes an editable pilot name, Supabase connection/error status, per-course global standings, and the current ghost target.
-- Course select has a cleaner racing-game start screen layout with a focused course list, leaderboard panel, ghost target, medal times, and stable footer actions.
-- `.env.local` Supabase URL/key were verified with a read-only REST request: HTTP 200, existing `claim-shakedown` row returned.
+- Start screen now presents courses plus a fixed-height top-10 leaderboard, with no local/Supabase setup language, medal targets, split chips, ghost-target block, or command footer.
+- The leaderboard top run is treated as the public ghost source when Supabase rows are available; the UI does not label ghosts or times as local.
+- Pilot name remains an editable input and finished runs submit with that name.
+- Race start has a large 3-2-1-GO overlay.
+- Debug/info panels start hidden. `P` still toggles tuning; `O` toggles the HUD/control panels.
+- Gamepad mapping now uses either bumper for boost. Right-stick X always yaws; D-pad remains the lateral/vertical strafe control.
+- Start screen includes a compact standard-gamepad controller map under the course list.
+- RT and LT are full forward/reverse thrust; lateral/vertical strafe is 75% of forward thrust; boost multiplies every thrust axis.
+- Ship visuals now include maneuver plumes for pitch, yaw, and roll.
+- Checkpoint colors now use green for the required gate, amber for upcoming gates, and faint neutral for passed gates; the off-screen edge glow matches the required-gate green.
+- Denser dead-iron asteroids are darker/metallic with stronger red-orange fissures/rings.
+- Gravity rumble and hull creak are silenced when leaving active racing, wrecking, resetting, or finishing.
+- The trajectory ribbon now visually starts ahead of the ship nose instead of directly at the center of mass.
 - Ghosts replay as translucent hologram ships using fixed-interval transform samples.
-- HUD/status now shows race time, current gate, best time, split delta, energy, hull, speed, pull, clearance, and restart/course hints.
+- HUD/status shows race time, current gate, best time, split delta, energy, hull, and state when panels are toggled on.
 - Minimap shows next checkpoint, finish, and ghost marker.
 - The base/station is no longer spawned in the racing entrypoint.
-- Boost visuals are confined to rear engine plumes; default weapon parts no longer add nose plumes to the main thruster set.
-- Checkpoint rings use a blue opacity ladder: active is nearly full blue, the next gate is half blue, later gates are dim blue, and passed gates remain red/orange.
-- A soft blue edge glow appears when the required next checkpoint is outside the camera view, biased toward the screen edge closest to the target direction.
-- Gamepad can drive the course screen: D-pad selects, A starts, Start restarts.
-- Gamepad flight controls now use left stick for pitch/roll, right stick for corrected yaw plus vertical strafe, LB/RB for lateral strafe, triggers for forward/reverse, and D-pad strafe remains available.
-- Tuning panel starts hidden and remains available with `P`.
-- Chase camera is ship-relative again and preserves ship roll/pitch instead of using world-up `lookAt`.
-- Mining, combat, cargo economy, hangar, and upgrades remain in the repo but are inactive in the racing branch entrypoint.
+- Mining, combat, cargo economy, hangar, and upgrades remain in the repo but are inactive in `src/main.ts` for this branch.
 
 ## In progress
 
-Pages deployment branch is configured for `racing-time-trials`. After the branch is pushed, verify the GitHub Actions Pages run completes and publishes the racing build.
-
-Right-stick controls and checkpoint guidance UI are implemented and build-clean. Needs hands-on playtest to confirm the corrected yaw direction, bumper strafe feel, vertical strafe feel, and edge-glow readability at racing speed.
-
-Start screen visual pass is implemented, build-clean, and Playwright-checked at desktop and mobile widths. Needs hands-on keyboard/gamepad menu pass.
-
-Racing cleanup pass is implemented and build-clean. Needs hands-on playtest to confirm the removed station, rear-only boost plumes, and checkpoint opacity ladder read clearly in motion.
+Racing cleanup bug-kill pass is implemented and build-clean. Local dev server is running at `http://127.0.0.1:5173/` for playtest.
 
 ## Known issues
 
@@ -50,17 +47,17 @@ Racing cleanup pass is implemented and build-clean. Needs hands-on playtest to c
 - Existing mining/combat/hangar systems are not removed, only inactive in `src/main.ts` for this branch.
 
 ## Next actions
-1. Verify the GitHub Actions Pages run completes for `racing-time-trials`.
-2. Playtest the redesigned start screen with keyboard and gamepad course selection.
-3. Playtest corrected right-stick yaw, right-stick vertical strafe, and LB/RB lateral strafe on a physical controller.
-4. Playtest checkpoint ring opacity and edge glow in cockpit and chase cameras; tune if guidance is too subtle or too loud.
-5. Run the dev server and finish a course to verify Supabase insert, standings refresh, and ghost replay in-browser.
-6. Play all three courses end-to-end and tune gate placement / medal times from real runs.
+1. Playtest start screen sizing and controller-help readability across all courses.
+2. Playtest LB/RB boost and D-pad strafing on a physical controller.
+3. Finish a course in browser to verify Supabase standings refresh and that the top leaderboard run becomes the ghost.
+4. Playtest gate colors, dead-iron asteroid readability, countdown, and audio cutoff after wreck/reset/finish.
 
 ## Active plan
-none
+docs/plans/2026-05-10 2251 Plan - Racing cleanup bug kill.md
 
 ## Recent logs
+- docs/log/2026-05-10 2333 Gamepad help and bumper boost.md - reverted RB strafe mode, mapped both bumpers to boost, added start-screen controller help, and build-checked
+- docs/log/2026-05-10 2258 Racing cleanup bug kill.md - simplified public racing UI, remapped controls, updated gates/asteroids/audio/countdown/thrust visuals, and build-checked
 - docs/log/2026-05-10 2150 Racing cleanup.md - removed station spawn, confined boost plumes to rear engines, changed gate guidance to blue opacity steps, and build-checked
 - docs/log/2026-05-10 2138 Bumper strafe and yaw invert.md - inverted right-stick yaw, remapped LB/RB to lateral strafe, updated controls text, and build-checked
 - docs/log/2026-05-10 2133 Racing start screen UI.md - redesigned the racing start/course select screen and verified with Playwright screenshots plus build
@@ -70,4 +67,3 @@ none
 - docs/log/2026-05-10 1850 Multiplayer leaderboard.md - added pilot-name UI, shared standings, Supabase status, and verified remote read
 - docs/log/2026-05-10 1755 Racing time trials.md - implemented racing branch with deterministic courses, checkpoint gates, local bests, and ghosts
 - docs/log/2026-05-10 0057 Rest of game.md - comprehensive plan + session 2 polish (asteroid fix, enemy tuning, lock-on, skybox, camera toggle)
-- docs/log/2026-05-09 2136 Browser thrust and creak pass.md - verified boost plumes with Playwright, anchored plume geometry, gated creak by pull, and mapped gamepad X to ship cycling

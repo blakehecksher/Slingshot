@@ -3,7 +3,7 @@ const PLAYER_KEY = 'slingshot.racing.playerName';
 const SAVE_VERSION = 1;
 const MAX_RECENT_RUNS = 12;
 const MAX_GHOST_SAMPLES = 3600;
-const REMOTE_LEADERBOARD_LIMIT = 8;
+const REMOTE_LEADERBOARD_LIMIT = 10;
 
 export interface GhostSample {
   readonly t: number;
@@ -104,11 +104,6 @@ function recordFromRun(run: GhostRun, recentRuns: RaceRunSummary[], source: Cour
   if (playerName) Object.assign(record, { playerName });
   if (source) Object.assign(record, { source });
   return record;
-}
-
-function fasterRecord(a: CourseRecord | null, b: CourseRecord): CourseRecord {
-  if (!a) return b;
-  return a.bestTimeSec <= b.bestTimeSec ? a : b;
 }
 
 function normalizePlayerName(): string {
@@ -298,8 +293,7 @@ export class SupabaseLeaderboardProvider extends LocalLeaderboardProvider {
       const row = rows[0];
       if (!row) return this.getRecord(courseId);
       const existing = this.getRecord(courseId);
-      const recentRuns = existing?.recentRuns ?? [];
-      const record = fasterRecord(existing, recordFromRun(row.ghost, recentRuns, 'supabase', row.player_name));
+      const record = recordFromRun(row.ghost, existing?.recentRuns ?? [], 'supabase', row.player_name);
       this.setRecord(record);
       return record;
     } catch (err) {
@@ -323,7 +317,7 @@ export class SupabaseLeaderboardProvider extends LocalLeaderboardProvider {
       const row = rows[0];
       if (row) {
         const existing = this.getRecord(sanitized.courseId);
-        const record = fasterRecord(existing, recordFromRun(row.ghost, existing?.recentRuns ?? [], 'supabase', row.player_name));
+        const record = recordFromRun(row.ghost, existing?.recentRuns ?? [], 'supabase', row.player_name);
         this.setRecord(record);
         isGlobalBest = Math.abs(row.time_sec - sanitized.timeSec) < 0.0005 && row.player_name === this.config.playerName;
         return {

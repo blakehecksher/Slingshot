@@ -9,6 +9,7 @@ export interface Asteroid {
   readonly velocity: THREE.Vector3;
   readonly radius: number;
   readonly mass: number;
+  readonly coreDensity: number;
   readonly rotationAxis: THREE.Vector3;
   readonly rotationRate: number;
   readonly body: RAPIER.RigidBody;
@@ -73,6 +74,15 @@ const GLINT_MATERIALS = [
   }),
 ];
 
+const DEAD_IRON_MATERIAL = new THREE.MeshBasicMaterial({
+  color: 0xff4f2f,
+  transparent: true,
+  opacity: 0.48,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  toneMapped: false,
+});
+
 function seededNoise(n: number): number {
   const s = Math.sin(n * 12.9898) * 43758.5453;
   return s - Math.floor(s);
@@ -98,10 +108,11 @@ function buildAsteroidGeometry(radius: number, seed: number): THREE.BufferGeomet
   return geom;
 }
 
-function addMineralGlints(mesh: THREE.Mesh, radius: number, seed: number): void {
+function addMineralGlints(mesh: THREE.Mesh, radius: number, seed: number, coreDensity: number): void {
   if (radius < 42) return;
 
-  const count = Math.min(9, 2 + Math.floor(radius / 34));
+  const densityT = Math.max(0, Math.min(1, (coreDensity - ASTEROID_TUNING.CORE_DENSITY_MIN) / ASTEROID_TUNING.CORE_DENSITY_RANGE));
+  const count = Math.min(14, 2 + Math.floor(radius / 34) + Math.floor(densityT * 5));
   const geom = new THREE.SphereGeometry(1, 8, 6);
   const normal = new THREE.Vector3();
 
@@ -111,13 +122,30 @@ function addMineralGlints(mesh: THREE.Mesh, radius: number, seed: number): void 
       seededNoise(seed + 24 + i * 4.1) * 2 - 1,
       seededNoise(seed + 25 + i * 4.1) * 2 - 1,
     ).normalize();
-    const mat = GLINT_MATERIALS[(i + Math.floor(seed)) % GLINT_MATERIALS.length];
+    const mat = densityT > 0.62 && i % 2 === 0 ? DEAD_IRON_MATERIAL : GLINT_MATERIALS[(i + Math.floor(seed)) % GLINT_MATERIALS.length];
     const glint = new THREE.Mesh(geom, mat);
     glint.position.copy(normal).multiplyScalar(radius * (0.74 + seededNoise(seed + i) * 0.18));
-    const s = Math.max(1.2, radius * (0.012 + seededNoise(seed + i * 2) * 0.018));
+    const s = Math.max(1.2, radius * (0.012 + densityT * 0.012 + seededNoise(seed + i * 2) * 0.018));
     glint.scale.set(s * 1.7, s * 0.55, s);
     glint.lookAt(normal.clone().multiplyScalar(radius * 2));
     mesh.add(glint);
+  }
+
+  if (densityT > 0.48) {
+    const ringCount = densityT > 0.78 ? 3 : 2;
+    for (let i = 0; i < ringCount; i++) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(radius * (0.76 + i * 0.055), Math.max(0.5, radius * 0.006), 6, 48),
+        DEAD_IRON_MATERIAL,
+      );
+      ring.rotation.set(
+        seededNoise(seed + 80 + i) * Math.PI,
+        seededNoise(seed + 90 + i) * Math.PI,
+        seededNoise(seed + 100 + i) * Math.PI,
+      );
+      ring.scale.set(1, 0.52 + seededNoise(seed + 110 + i) * 0.26, 1);
+      mesh.add(ring);
+    }
   }
 }
 
@@ -134,9 +162,15 @@ function makeAsteroid(
   seed: number,
   velocity = new THREE.Vector3(),
 ): Asteroid {
-  const mat = ASTEROID_MATERIALS[Math.floor(seed) % ASTEROID_MATERIALS.length];
+  const coreDensity = ASTEROID_TUNING.CORE_DENSITY_MIN + seededNoise(seed + 11) * ASTEROID_TUNING.CORE_DENSITY_RANGE;
+  const densityT = Math.max(0, Math.min(1, (coreDensity - ASTEROID_TUNING.CORE_DENSITY_MIN) / ASTEROID_TUNING.CORE_DENSITY_RANGE));
+  const baseMat = ASTEROID_MATERIALS[Math.floor(seed) % ASTEROID_MATERIALS.length];
+  const mat = baseMat.clone();
+  mat.color.lerp(new THREE.Color(0x2b2623), densityT * 0.55);
+  mat.metalness = Math.min(0.28, mat.metalness + densityT * 0.18);
+  mat.roughness = Math.max(0.62, mat.roughness - densityT * 0.16);
   const mesh = new THREE.Mesh(buildAsteroidGeometry(radius, seed), mat);
-  addMineralGlints(mesh, radius, seed);
+  addMineralGlints(mesh, radius, seed, coreDensity);
   mesh.position.copy(position);
   mesh.castShadow = false;
   mesh.receiveShadow = false;
@@ -152,13 +186,13 @@ function makeAsteroid(
     .setRestitution(0);
   const collider = physics.world.createCollider(colliderDesc, body);
 
-  const coreDensity = ASTEROID_TUNING.CORE_DENSITY_MIN + seededNoise(seed + 11) * ASTEROID_TUNING.CORE_DENSITY_RANGE;
   const asteroid: Asteroid = {
     mesh,
     position: position.clone(),
     velocity: velocity.clone(),
     radius,
     mass: massForRadius(radius, coreDensity),
+    coreDensity,
     rotationAxis: new THREE.Vector3(
       seededNoise(seed + 1) * 2 - 1,
       seededNoise(seed + 2) * 2 - 1,

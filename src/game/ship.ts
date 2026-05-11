@@ -66,11 +66,11 @@ export function defaultShipMods(): ShipMods {
 
 export const SHIP_TUNING = {
   MASS: 1.0,
-  // Rear thrusters do most of the work. Reverse thrusters are small RCS jets,
-  // ~30% of main thrust. Brake is a velocity damper, not a counter-thrust.
+  // Racing baseline: RT and LT are symmetric full thrust; strafe axes are
+  // three-quarters of main thrust for correction without replacing line choice.
   FORWARD_THRUST: 200,
-  REVERSE_THRUST: 65,
-  STRAFE_THRUST: 30,
+  REVERSE_THRUST: 200,
+  STRAFE_THRUST: 150,
   FORWARD_THRUST_BIAS: 1.0,
 
   MAX_PITCH_RATE: 1.5,
@@ -87,8 +87,7 @@ export const SHIP_TUNING = {
   SPEED_ASSIST_PULL_SUPPRESS_LO: 1.0,
   SPEED_ASSIST_PULL_SUPPRESS_HI: 8.0,
 
-  // Boost only multiplies forward thrust (see applyCommand: only inside
-  // fwdThrust path, never inside revThrust).
+  // Boost multiplies every thrust axis while held.
   BOOST_THRUST_MULT: 2.4,
   BOOST_ENERGY_MULT: 4.0,
 
@@ -129,6 +128,12 @@ export class Ship {
     strafeRight: 0,
     strafeUp: 0,
     strafeDown: 0,
+    pitchUp: 0,
+    pitchDown: 0,
+    yawLeft: 0,
+    yawRight: 0,
+    rollLeft: 0,
+    rollRight: 0,
   };
   private _variant: ShipVariantId;
   private _frozen = false;
@@ -180,9 +185,9 @@ export class Ship {
       const boost = Math.max(0, Math.min(1, cmd.boost ?? 0));
       const boostMult = 1 + boost * (SHIP_TUNING.BOOST_THRUST_MULT - 1);
       const fwdThrust = SHIP_TUNING.FORWARD_THRUST * SHIP_TUNING.FORWARD_THRUST_BIAS * mass * boostMult * this.mods.thrustMult * cargoPenalty;
-      const revThrust = SHIP_TUNING.REVERSE_THRUST * mass * this.mods.reverseMult * cargoPenalty;
+      const revThrust = SHIP_TUNING.REVERSE_THRUST * mass * boostMult * this.mods.reverseMult * cargoPenalty;
       const forwardScale = cmd.thrust.z < 0 ? fwdThrust : revThrust;
-      const strafe = SHIP_TUNING.STRAFE_THRUST * mass * this.mods.thrustMult * cargoPenalty;
+      const strafe = SHIP_TUNING.STRAFE_THRUST * mass * boostMult * this.mods.thrustMult * cargoPenalty;
       this._force.set(
         cmd.thrust.x * strafe,
         cmd.thrust.y * strafe,
@@ -297,6 +302,12 @@ export class Ship {
     this.setThrusterVisual('strafeRight', Math.max(0, -cmd.thrust.x), 0.4, 0.7);
     this.setThrusterVisual('strafeUp', Math.max(0, -cmd.thrust.y), 0.36, 0.62);
     this.setThrusterVisual('strafeDown', Math.max(0, cmd.thrust.y), 0.36, 0.62);
+    this.setThrusterVisual('pitchUp', Math.max(0, cmd.rotate.pitch), 0.3, 0.5);
+    this.setThrusterVisual('pitchDown', Math.max(0, -cmd.rotate.pitch), 0.3, 0.5);
+    this.setThrusterVisual('yawLeft', Math.max(0, -cmd.rotate.yaw), 0.3, 0.5);
+    this.setThrusterVisual('yawRight', Math.max(0, cmd.rotate.yaw), 0.3, 0.5);
+    this.setThrusterVisual('rollLeft', Math.max(0, -cmd.rotate.roll), 0.28, 0.46);
+    this.setThrusterVisual('rollRight', Math.max(0, cmd.rotate.roll), 0.28, 0.46);
   }
 
   private clearThrustVisuals(): void {
@@ -306,6 +317,12 @@ export class Ship {
     this.setThrusterVisual('strafeRight', 0, 0.4, 0.7);
     this.setThrusterVisual('strafeUp', 0, 0.36, 0.62);
     this.setThrusterVisual('strafeDown', 0, 0.36, 0.62);
+    this.setThrusterVisual('pitchUp', 0, 0.3, 0.5);
+    this.setThrusterVisual('pitchDown', 0, 0.3, 0.5);
+    this.setThrusterVisual('yawLeft', 0, 0.3, 0.5);
+    this.setThrusterVisual('yawRight', 0, 0.3, 0.5);
+    this.setThrusterVisual('rollLeft', 0, 0.28, 0.46);
+    this.setThrusterVisual('rollRight', 0, 0.28, 0.46);
   }
 
   private setThrusterVisual(key: keyof ThrusterSet, amount: number, baseWidth: number, baseLength: number): void {
