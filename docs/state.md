@@ -1,5 +1,5 @@
 # State
-_Last updated: 2026-05-18 2345_
+_Last updated: 2026-05-19 1714_
 
 ## Current focus
 
@@ -67,6 +67,8 @@ Friend Heat multiplayer first implementation has shipped on this branch (build-c
 
 ## In progress
 
+Cross-scene UI consistency pass landed. `src/render/theme.ts` now holds the design tokens (colors, typography, spacing, panel effects) as CSS variables, and an overlay at the bottom of `injectRaceStyles()` retunes pause/results/invalid/friend-heat/settings to match the start-screen claim-board look. Records-graph filled-triangle bug, friend-entry horizontal scrollbar, and the no-click heat-duration row are all fixed. Build-checked only - still needs browser/controller playtest.
+
 UI/settings/audio/records/minimap polish has a first implementation and follow-up fixes for harsh sounds, settings layout, pause menu redundancy, gamepad mapping, constant music-drone hum, settings focus scrolling, held D-pad repeat, crash auto-restart, and simplified results/setup scene flow. It builds cleanly and still needs manual browser/audio/controller review.
 
 First pass implementation for the full time-trial scene flow is complete and build-checked. The start screen has been redesigned and build-checked; it still needs manual visual/controller playtesting in browser, especially with a physical Xbox controller.
@@ -128,6 +130,7 @@ docs/plans/2026-05-18 1901 Plan - UI Settings Audio Polish.md
 Friend Heat plan at `docs/plans/2026-05-17 2127 Plan - Friend Heat Multiplayer.md` is complete; future work is anti-cheat and Realtime polish.
 
 ## Recent logs
+- docs/log/2026-05-19 1714 UI consistency theme and friend heat polish.md - added src/render/theme.ts CSS-variable design system, applied a consistency overlay so pause/results/invalid/friend-heat/settings adopt the start-screen look, polished start-screen layout, fixed the records graph filling as a triangle, killed the friend-entry horizontal scrollbar, made heat-duration/course rows clickable cycle controls, and surfaced a friendly schema-cache message when Friend Heat tables are missing
 - docs/log/2026-05-18 2345 Friend Heat implementation.md - implemented Supabase friend_heat_* tables, FriendHeatClient, lobby/entry/results scenes, heat-attempt gating, lobby-best ghost swap, and dual leaderboard submission; build-checked
 - docs/log/2026-05-18 2124 Results and setup scene simplification.md - removed the separate race setup scene and Race Ghosts result branch, simplified result metrics/actions, updated the active spec/decision log, and build-checked
 - docs/log/2026-05-18 2112 Crash restart settings scroll audio hum.md - removed procedural music-drone hum, made crashes auto-restart after fade, fixed settings focus scroll, added held menu navigation repeat, and build-checked
