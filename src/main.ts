@@ -29,6 +29,7 @@ import { Minimap } from './render/minimap';
 import { createRenderRig } from './render/scene';
 import { resolveShipVisual } from './render/shipVisual';
 import { TrajectoryRibbon } from './render/trajectory';
+import { THEME_CSS } from './render/theme';
 
 const canvas = document.getElementById('app') as HTMLCanvasElement;
 const hud = document.getElementById('hud') as HTMLDivElement;
@@ -706,7 +707,12 @@ async function withFriendBusy(label: string, action: () => Promise<void>): Promi
     await action();
     if (friendStatusMessage === label) friendStatusMessage = '';
   } catch (err) {
-    friendStatusMessage = `Error: ${shortError(err instanceof Error ? err.message : String(err))}`;
+    const raw = err instanceof Error ? err.message : String(err);
+    if (/PGRST205|schema cache|friend_heat/.test(raw)) {
+      friendStatusMessage = 'Friend Heat tables missing. Apply docs/database/supabase-racing.sql in Supabase.';
+    } else {
+      friendStatusMessage = `Error: ${shortError(raw)}`;
+    }
   } finally {
     friendBusy = false;
     renderAppScene();
@@ -1458,8 +1464,8 @@ function renderResultsScene(recordOverride?: CourseRecord): string {
 
 function renderFriendEntryScene(message: string): string {
   const dur = HEAT_DURATION_OPTIONS[friendHeatDurationIndex];
-  const courseRow = friendOptionRow('Course', selectedCourse.name, friendEntryFocusIndex === 0, 'friend-entry-course');
-  const durationRow = friendOptionRow('Heat duration', `${Math.round(dur / 60)} min`, friendEntryFocusIndex === 1, 'friend-entry-duration');
+  const courseRow = friendCycleRow('Course', selectedCourse.name, friendEntryFocusIndex === 0, 'friend-entry-course');
+  const durationRow = friendCycleRow('Heat duration', `${Math.round(dur / 60)} min`, friendEntryFocusIndex === 1, 'friend-entry-duration');
   const createRow = friendActionRow('Create heat', `Host an invite-code lobby on ${selectedCourse.name}`, friendEntryFocusIndex === 2, 'friend-entry-create');
   const joinRow = friendJoinRow(friendEntryFocusIndex === 3);
   const backRow = friendActionRow('Back', 'Return to title board', friendEntryFocusIndex === 4, 'friend-entry-back');
@@ -1620,10 +1626,14 @@ function friendLobbyOptions(snap: FriendHeatSnapshot, isHost: boolean): FriendLo
   return [{ label: 'Back to title' }];
 }
 
-function friendOptionRow(label: string, value: string, selected: boolean, id: string): string {
-  return `<button id="${id}" class="setting-row${selected ? ' selected' : ''}">
+function friendCycleRow(label: string, value: string, selected: boolean, id: string): string {
+  return `<button id="${id}" class="setting-row cycle-row${selected ? ' selected' : ''}">
     <span>${escapeHtml(label)}</span>
-    <b>${escapeHtml(value)}</b>
+    <span class="cycle-value">
+      <em class="cycle-arrow" aria-hidden="true">&lsaquo;</em>
+      <b>${escapeHtml(value)}</b>
+      <em class="cycle-arrow" aria-hidden="true">&rsaquo;</em>
+    </span>
   </button>`;
 }
 
@@ -1645,10 +1655,21 @@ function wireFriendSceneEvents(): void {
   if (appScene === 'friend-entry') {
     for (let i = 0; i < friendEntryRowCount(); i++) {
       const ids = ['friend-entry-course', 'friend-entry-duration', 'friend-entry-create', 'friend-entry-join', 'friend-entry-back'];
-      coursePanel.querySelector<HTMLElement>(`#${ids[i]}`)?.addEventListener('click', (event) => {
+      const el = coursePanel.querySelector<HTMLElement>(`#${ids[i]}`);
+      el?.addEventListener('click', (event) => {
         if ((event.target as HTMLElement).tagName === 'INPUT') return;
         friendEntryFocusIndex = i;
+        if (i === 0 || i === 1) {
+          handleFriendEntryInput({ ...emptyMenuCommand(), menuRight: true });
+          return;
+        }
         handleFriendEntryInput({ ...emptyMenuCommand(), menuConfirm: true });
+      });
+      el?.addEventListener('contextmenu', (event) => {
+        if (i !== 0 && i !== 1) return;
+        event.preventDefault();
+        friendEntryFocusIndex = i;
+        handleFriendEntryInput({ ...emptyMenuCommand(), menuLeft: true });
       });
     }
     const codeInput = coursePanel.querySelector<HTMLInputElement>('#friend-join-code');
@@ -2075,6 +2096,10 @@ function personalRank(record: CourseRecord, entries: readonly RaceLeaderboardEnt
 }
 
 function injectRaceStyles(): void {
+  const themeStyle = document.createElement('style');
+  themeStyle.id = 'slingshot-theme';
+  themeStyle.textContent = THEME_CSS;
+  document.head.appendChild(themeStyle);
   const style = document.createElement('style');
   style.textContent = `
     #course-select {
@@ -2095,7 +2120,8 @@ function injectRaceStyles(): void {
       width: min(1100px, 100%);
       min-height: min(760px, calc(100vh - 52px));
       max-height: calc(100vh - 52px);
-      overflow: auto;
+      overflow-y: auto;
+      overflow-x: hidden;
       border: 1px solid rgba(39, 32, 16, 0.95);
       background:
         linear-gradient(180deg, rgba(17, 14, 9, 0.96), rgba(12, 10, 7, 0.92)),
@@ -2536,6 +2562,25 @@ function injectRaceStyles(): void {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    #course-select .cycle-row .cycle-value {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--c-text-strong);
+    }
+    #course-select .cycle-row .cycle-arrow {
+      color: var(--c-text-muted);
+      font-style: normal;
+      font-size: 16px;
+      line-height: 1;
+      transition: color 120ms ease;
+    }
+    #course-select .cycle-row.selected .cycle-arrow {
+      color: var(--c-accent);
+    }
+    #course-select .cycle-row:hover .cycle-arrow {
+      color: var(--c-accent-bright);
     }
     #course-select .big-time {
       color: #fff8e8;
@@ -3147,19 +3192,22 @@ function injectRaceStyles(): void {
       vector-effect: non-scaling-stroke;
     }
     #course-select .record-graph polyline {
-      fill: none;
+      fill: none !important;
       stroke-width: 1.8;
+      stroke-linejoin: round;
+      stroke-linecap: round;
       vector-effect: non-scaling-stroke;
     }
     #course-select .record-graph circle {
+      stroke: none;
       vector-effect: non-scaling-stroke;
     }
-    #course-select .record-graph .you-line,
-    #course-select .record-graph .you-dot { stroke: #d4921f; fill: #d4921f; }
-    #course-select .record-graph .pb-line,
-    #course-select .record-graph .pb-dot { stroke: #ede3cc; fill: #ede3cc; opacity: 0.75; }
-    #course-select .record-graph .lead-line,
-    #course-select .record-graph .lead-dot { stroke: #2a8c80; fill: #2a8c80; }
+    #course-select .record-graph polyline.you-line { stroke: var(--c-accent); }
+    #course-select .record-graph circle.you-dot { fill: var(--c-accent); }
+    #course-select .record-graph polyline.pb-line { stroke: var(--c-text); opacity: 0.75; }
+    #course-select .record-graph circle.pb-dot { fill: var(--c-text); opacity: 0.85; }
+    #course-select .record-graph polyline.lead-line { stroke: var(--c-teal); }
+    #course-select .record-graph circle.lead-dot { fill: var(--c-teal); }
     #course-select .record-table {
       min-height: 0;
       max-height: 96px;
@@ -3531,6 +3579,506 @@ function injectRaceStyles(): void {
     #course-select .friend-runs li.rank-1 span,
     #course-select .friend-runs li.rank-1 em {
       color: #d4921f;
+    }
+    /* ===================================================================
+     * Aesthetic consistency overlay
+     * Brings non-start scenes (pause, results, invalid, friend-*, settings)
+     * in line with the start-screen's monochrome Amber Iron claim board.
+     * =================================================================== */
+    #course-select {
+      color: var(--c-text);
+      font-family: var(--font-display);
+      background:
+        linear-gradient(180deg, rgba(7, 6, 10, 0.86), rgba(7, 6, 10, 0.62) 48%, rgba(7, 6, 10, 0.86)),
+        radial-gradient(circle at 70% 12%, rgba(42, 140, 128, 0.06), transparent 32%),
+        #07060a;
+    }
+    #course-select .course-card {
+      background: var(--c-bg-1);
+      border-color: var(--c-border);
+      box-shadow: var(--shadow-panel);
+    }
+    #course-select .course-header {
+      border-bottom-color: var(--c-border);
+    }
+    #course-select .league-title {
+      color: var(--c-teal);
+      letter-spacing: var(--ls-label);
+      font-weight: var(--fw-bold);
+    }
+    #course-select h1 {
+      color: var(--c-text-strong);
+      font-weight: var(--fw-heavy);
+      letter-spacing: var(--ls-tight);
+    }
+    #course-select p {
+      color: var(--c-text-muted);
+      font-size: var(--fs-body);
+    }
+    #course-select .terminal-panel {
+      border-color: var(--c-border);
+      background:
+        linear-gradient(180deg, rgba(17, 14, 9, 0.96), rgba(12, 10, 7, 0.94)),
+        var(--scanlines);
+    }
+    /* Section header bars: cleaner stripe with eyebrow + meta */
+    #course-select .section-title {
+      align-items: baseline;
+      gap: 12px;
+      padding-bottom: 8px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--c-border);
+    }
+    #course-select .section-title h2 {
+      color: var(--c-text-muted);
+      font-size: var(--fs-mini);
+      font-weight: var(--fw-bold);
+      letter-spacing: var(--ls-label);
+    }
+    #course-select .section-title span {
+      color: var(--c-text-faint);
+      font-size: var(--fs-mini);
+      letter-spacing: 0.08em;
+    }
+    /* Pilot row: monochrome callsign matching start screen */
+    #course-select .pilot-row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 4px;
+      color: var(--c-text-muted);
+      font-size: var(--fs-mini);
+      letter-spacing: var(--ls-label);
+      text-transform: uppercase;
+      text-align: right;
+    }
+    #course-select .pilot-row label {
+      color: var(--c-text-muted);
+      font-weight: var(--fw-text);
+      letter-spacing: var(--ls-label);
+    }
+    #course-select .pilot-row input {
+      border: 0;
+      border-bottom: 1.5px solid var(--c-accent);
+      background: transparent;
+      color: var(--c-text);
+      padding: 4px 0;
+      font: var(--fw-bold) var(--fs-md) var(--font-mono);
+      letter-spacing: 0.06em;
+      text-align: right;
+      text-transform: uppercase;
+    }
+    #course-select .pilot-row input:focus {
+      outline: none;
+      border-bottom-color: var(--c-accent-bright);
+    }
+    #course-select .pilot-row span {
+      color: var(--c-text-faint);
+      font-size: var(--fs-mini);
+      letter-spacing: 0.12em;
+    }
+    /* Unified menu / setting / scene action buttons */
+    #course-select .menu-button,
+    #course-select .setting-row {
+      min-height: 42px;
+      padding: 10px 14px;
+      border: 1px solid var(--c-border);
+      border-left: 3px solid transparent;
+      background: var(--c-bg-2);
+      color: var(--c-text);
+      font: var(--fw-bold) var(--fs-mini) var(--font-mono);
+      letter-spacing: var(--ls-button);
+      text-transform: uppercase;
+      transition: background-color 120ms ease, border-color 120ms ease;
+    }
+    #course-select .menu-button:hover,
+    #course-select .setting-row:hover {
+      background: var(--c-bg-3);
+      border-color: var(--c-border-strong);
+    }
+    #course-select .menu-button.selected,
+    #course-select .setting-row.selected {
+      background: var(--c-bg-4);
+      border-color: var(--c-border-strong);
+      border-left-color: var(--c-accent);
+      color: var(--c-text-strong);
+    }
+    #course-select .setting-row span {
+      color: var(--c-text-muted);
+      font-size: var(--fs-mini);
+      letter-spacing: var(--ls-button);
+    }
+    #course-select .setting-row.selected span {
+      color: var(--c-text);
+    }
+    #course-select .setting-row b {
+      color: var(--c-text-strong);
+      font-weight: var(--fw-bold);
+    }
+    #course-select .setting-row.selected b {
+      color: var(--c-accent);
+    }
+    /* Primary action: filled amber, matches start screen Start Race */
+    #course-select .scene-actions {
+      gap: 8px;
+    }
+    #course-select .scene-actions .menu-button:first-child {
+      background: var(--c-accent);
+      color: #0c0a07;
+      border-color: var(--c-accent);
+      border-left-color: var(--c-accent);
+    }
+    #course-select .scene-actions .menu-button:first-child:hover {
+      background: var(--c-accent-bright);
+      border-color: var(--c-accent-bright);
+    }
+    #course-select .scene-actions .menu-button:first-child.selected {
+      background: var(--c-accent-bright);
+      border-color: var(--c-accent-bright);
+      outline: 1px solid var(--c-teal);
+      outline-offset: 2px;
+    }
+    /* Metric tiles align with start-screen calm muted look */
+    #course-select .metric {
+      border-color: var(--c-border);
+      background: var(--c-bg-1);
+    }
+    #course-select .metric span {
+      color: var(--c-text-muted);
+      letter-spacing: var(--ls-button);
+    }
+    #course-select .metric b {
+      color: var(--c-text-strong);
+    }
+    /* Leaderboard rows: same striped pattern as title-leaderboard */
+    #course-select .leaderboard li {
+      border-color: var(--c-border);
+      background: var(--c-bg-2);
+    }
+    #course-select .leaderboard li:nth-child(even) {
+      background: var(--c-bg-1);
+    }
+    #course-select .leaderboard b { color: var(--c-text-strong); }
+    #course-select .leaderboard em { color: var(--c-accent); }
+    /* Big finishing time uses Orbitron like start-screen PB */
+    #course-select .big-time {
+      font-family: var(--font-numeric);
+      color: var(--c-accent);
+      font-weight: var(--fw-bold);
+      letter-spacing: 0.04em;
+    }
+    /* Splits */
+    #course-select .splits-board li {
+      border-color: var(--c-border);
+      background: var(--c-bg-2);
+    }
+    #course-select .splits-board b { color: var(--c-text-strong); }
+    #course-select .splits-board em { color: var(--c-teal-bright); }
+    /* Friend Heat panels: dark monochrome to match */
+    #course-select .friend-card .friend-blurb {
+      color: var(--c-text-muted);
+      font-size: var(--fs-body);
+    }
+    #course-select .friend-card .friend-tip {
+      color: var(--c-text-faint);
+      font-size: var(--fs-mini);
+      letter-spacing: 0.06em;
+    }
+    #course-select .friend-card .friend-status {
+      border: 1px solid var(--c-danger);
+      background: rgba(155, 66, 50, 0.12);
+      color: var(--c-warn);
+      padding: 8px 10px;
+      font-size: var(--fs-small);
+      line-height: 1.4;
+      margin: 0 0 10px;
+    }
+    #course-select .friend-invite,
+    #course-select .friend-timer {
+      border-color: var(--c-border);
+      background: var(--c-bg-1);
+    }
+    #course-select .friend-invite span,
+    #course-select .friend-timer span {
+      color: var(--c-text-muted);
+      letter-spacing: var(--ls-label);
+    }
+    #course-select .friend-invite b {
+      font-family: var(--font-mono);
+      color: var(--c-accent);
+      font-weight: var(--fw-heavy);
+      letter-spacing: 0.22em;
+    }
+    #course-select .friend-timer b {
+      font-family: var(--font-numeric);
+      color: var(--c-text-strong);
+      font-weight: var(--fw-bold);
+      letter-spacing: 0.04em;
+    }
+    #course-select .friend-invite em,
+    #course-select .friend-timer em {
+      color: var(--c-text-faint);
+    }
+    /* Friend join row: subtle, amber underline like callsign */
+    #course-select .friend-join-row {
+      border-color: var(--c-border);
+      border-left: 3px solid transparent;
+      background: var(--c-bg-2);
+    }
+    #course-select .friend-join-row.selected {
+      background: var(--c-bg-4);
+      border-color: var(--c-border-strong);
+      border-left-color: var(--c-accent);
+    }
+    #course-select .friend-join-row span {
+      color: var(--c-text-muted);
+      letter-spacing: var(--ls-button);
+    }
+    #course-select .friend-join-row input {
+      border: 0;
+      border-bottom: 1.5px solid var(--c-accent);
+      background: transparent;
+      color: var(--c-text-strong);
+      padding: 6px 0;
+      letter-spacing: 0.18em;
+    }
+    #course-select .friend-join-row input:focus {
+      outline: none;
+      border-bottom-color: var(--c-accent-bright);
+    }
+    /* Friend Heat layout: stack panels vertically when narrow, with tighter gap */
+    #course-select .friend-panel {
+      gap: 12px;
+    }
+    /* Menu hints: subdued footer */
+    #course-select .menu-hints {
+      border-top-color: var(--c-border);
+      gap: 6px;
+    }
+    #course-select .menu-hints span {
+      border-color: var(--c-border);
+      background: var(--c-bg-1);
+      color: var(--c-text-muted);
+      letter-spacing: 0.08em;
+      font-size: var(--fs-micro);
+      text-transform: uppercase;
+    }
+    /* Settings card: align with start-screen sidebar feel */
+    #course-select .settings-card {
+      border-color: var(--c-border);
+    }
+    #course-select .settings-card-head {
+      border-bottom-color: var(--c-border);
+    }
+    #course-select .settings-card-head h1 {
+      color: var(--c-text-strong);
+    }
+    #course-select .settings-card-head p {
+      color: var(--c-text-muted);
+    }
+    #course-select .settings-close {
+      border-color: var(--c-border);
+      background: var(--c-bg-2);
+      color: var(--c-text-muted);
+    }
+    #course-select .settings-close:hover,
+    #course-select .settings-close:focus-visible {
+      color: var(--c-text-strong);
+      border-color: var(--c-accent);
+    }
+    /* Scrollbar styling consistency */
+    #course-select *::-webkit-scrollbar { width: 10px; height: 10px; }
+    #course-select *::-webkit-scrollbar-track { background: transparent; }
+    #course-select *::-webkit-scrollbar-thumb {
+      background: var(--c-border-strong);
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    #course-select *::-webkit-scrollbar-thumb:hover { background: var(--c-accent); background-clip: padding-box; }
+    /* ------------------------------------------------------------------
+     * Start screen layout polish
+     * ------------------------------------------------------------------ */
+    #course-select .start-header {
+      padding: 22px 24px 14px;
+      align-items: center;
+    }
+    #course-select .start-brand { gap: 4px; }
+    #course-select .start-header .league-title {
+      color: var(--c-teal);
+      font-size: var(--fs-mini);
+      letter-spacing: var(--ls-label);
+    }
+    #course-select .start-board {
+      margin: 0 24px 16px;
+      border-color: var(--c-border);
+      background: var(--c-bg-2);
+    }
+    #course-select .start-course-col {
+      border-right-color: var(--c-border);
+    }
+    #course-select .start-section-head {
+      min-height: 38px;
+      padding: 10px 16px;
+      border-bottom-color: var(--c-border);
+      background: var(--c-bg-2);
+    }
+    #course-select .start-section-head span {
+      color: var(--c-text-muted);
+      letter-spacing: var(--ls-label);
+    }
+    #course-select .start-section-head .course-head {
+      color: var(--c-teal);
+      letter-spacing: 0.06em;
+    }
+    #course-select .start-course-row {
+      gap: 8px;
+      padding: 16px 18px;
+      border-bottom-color: var(--c-border);
+      background: var(--c-bg-2);
+    }
+    #course-select .start-course-row:nth-child(even) { background: var(--c-bg-1); }
+    #course-select .start-course-row:hover,
+    #course-select .start-course-row:focus-visible { background: var(--c-bg-3); }
+    #course-select .start-course-row.selected {
+      background: var(--c-bg-4);
+      border-left-color: var(--c-accent);
+    }
+    #course-select .start-course-title strong {
+      font-size: var(--fs-md);
+      letter-spacing: 0.02em;
+    }
+    #course-select .start-course-row small { color: var(--c-text-muted); }
+    #course-select .start-course-meta {
+      gap: 8px;
+      color: var(--c-text-faint);
+      font-size: var(--fs-mini);
+    }
+    #course-select .start-course-meta em,
+    #course-select .start-course-meta b {
+      color: var(--c-text-muted);
+      font-weight: var(--fw-text);
+    }
+    #course-select .start-course-row.selected .start-course-meta { color: var(--c-text-muted); }
+    #course-select .start-course-row.selected .start-course-meta b {
+      color: var(--c-accent);
+      font-weight: var(--fw-bold);
+    }
+    #course-select .start-course-zone {
+      color: var(--c-text-faint);
+      letter-spacing: var(--ls-label);
+    }
+    /* Title leaderboard table polish */
+    #course-select .title-board-head {
+      padding: 8px 16px;
+      border-bottom-color: var(--c-border);
+      background: var(--c-bg-2);
+      color: var(--c-text-faint);
+      font-size: var(--fs-mini);
+      letter-spacing: var(--ls-button);
+      text-transform: uppercase;
+    }
+    #course-select .title-leaderboard li {
+      padding: 9px 16px;
+      border-bottom-color: var(--c-border);
+      background: var(--c-bg-2);
+      font-size: var(--fs-body);
+    }
+    #course-select .title-leaderboard li:nth-child(even) { background: var(--c-bg-1); }
+    #course-select .title-leaderboard li.me { background: var(--c-bg-4); }
+    #course-select .title-leaderboard span { color: var(--c-text-faint); font-weight: var(--fw-bold); }
+    #course-select .title-leaderboard b { color: var(--c-text); font-weight: var(--fw-text); }
+    #course-select .title-leaderboard em { color: var(--c-text-strong); font-weight: var(--fw-bold); }
+    /* Personal best bar: lay out as three balanced columns */
+    #course-select .personal-best-bar {
+      align-items: center;
+      gap: 18px;
+      padding: 16px 18px;
+      border-top-color: var(--c-border);
+      background: var(--c-bg-2);
+    }
+    #course-select .record-compare {
+      border-color: var(--c-border);
+      background: var(--c-bg-1);
+      padding: 10px 12px;
+      gap: 8px 12px;
+    }
+    #course-select .record-compare-head { color: var(--c-text-muted); }
+    #course-select .record-compare-head em { color: var(--c-text-faint); }
+    #course-select .record-graph {
+      border-color: var(--c-border);
+      background:
+        linear-gradient(180deg, rgba(42, 140, 128, 0.04), rgba(0, 0, 0, 0.16));
+    }
+    #course-select .record-graph .grid {
+      stroke: rgba(110, 98, 80, 0.22);
+    }
+    #course-select .record-table {
+      border-color: var(--c-border);
+      background: var(--c-bg-1);
+    }
+    #course-select .personal-best b {
+      color: var(--c-accent);
+      font-size: 32px;
+    }
+    #course-select .personal-best span { color: var(--c-text-muted); letter-spacing: var(--ls-label); }
+    #course-select .personal-best em { color: var(--c-text-faint); }
+    #course-select .personal-best strong { color: var(--c-text-faint); }
+    /* Start actions: amber primary, ghost secondary */
+    #course-select .start-actions { gap: 10px; }
+    #course-select .launch-action {
+      min-height: 44px;
+      padding: 12px 30px;
+      background: var(--c-accent);
+      color: #0c0a07;
+      letter-spacing: 0.14em;
+      font-weight: var(--fw-heavy);
+    }
+    #course-select .launch-action:hover { background: var(--c-accent-bright); opacity: 1; }
+    #course-select .launch-action.selected {
+      background: var(--c-accent-bright);
+      outline: 1px solid var(--c-teal);
+      outline-offset: 2px;
+    }
+    #course-select .utility-action {
+      min-height: 36px;
+      padding: 10px 14px;
+      border: 1px solid var(--c-border);
+      background: var(--c-bg-1);
+      color: var(--c-text-muted);
+      letter-spacing: 0.12em;
+    }
+    #course-select .utility-action:hover { color: var(--c-text); border-color: var(--c-border-strong); opacity: 1; }
+    #course-select .utility-action.selected {
+      color: var(--c-text-strong);
+      border-color: var(--c-accent);
+      outline: 1px solid var(--c-teal);
+      outline-offset: 2px;
+    }
+    /* Footer hints */
+    #course-select .start-hints {
+      margin: 0 24px 16px;
+      gap: 8px;
+    }
+    #course-select .footer-settings {
+      border-color: var(--c-border);
+      background: var(--c-bg-1);
+      color: var(--c-text-muted);
+    }
+    #course-select .footer-settings:hover {
+      color: var(--c-text);
+      border-color: var(--c-border-strong);
+    }
+    #course-select .footer-settings.selected {
+      color: var(--c-text-strong);
+      border-color: var(--c-accent);
+      outline: 1px solid var(--c-teal);
+    }
+    #course-select .start-hints span {
+      border-color: var(--c-border);
+      background: var(--c-bg-1);
+      color: var(--c-text-muted);
+      font-size: var(--fs-micro);
+      letter-spacing: 0.1em;
+      padding: 6px 10px;
+      text-transform: uppercase;
     }
     #race-countdown {
       position: fixed;
