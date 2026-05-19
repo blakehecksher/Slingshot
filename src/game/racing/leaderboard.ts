@@ -113,12 +113,33 @@ function recordFromRun(run: GhostRun, recentRuns: RaceRunSummary[], source: Cour
 function normalizePlayerName(): string {
   const fromEnv = import.meta.env.VITE_SLINGSHOT_PLAYER_NAME;
   const fromLocal = safeLocalStorageGet(PLAYER_KEY);
-  return sanitizePlayerName(fromLocal || fromEnv || 'Anonymous Pilot');
+  const candidate = fromLocal || fromEnv;
+  if (candidate) return sanitizePlayerName(candidate);
+  const generated = generateRandomPilotName();
+  safeLocalStorageSet(PLAYER_KEY, generated);
+  return generated;
+}
+
+function generateRandomPilotName(): string {
+  const n = Math.floor(Math.random() * 900) + 100;
+  return `Pilot-${n}`;
 }
 
 function sanitizePlayerName(name: string): string {
   const cleaned = name.replace(/\s+/g, ' ').trim().slice(0, 40);
-  return cleaned || 'Anonymous Pilot';
+  return cleaned || generateRandomPilotName();
+}
+
+function dedupeByPilot(rows: readonly RaceLeaderboardEntry[]): RaceLeaderboardEntry[] {
+  const seen = new Set<string>();
+  const out: RaceLeaderboardEntry[] = [];
+  for (const row of rows) {
+    const key = (row.playerName ?? '').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...row, rank: out.length + 1 });
+  }
+  return out;
 }
 
 function safeLocalStorageGet(key: string): string {
@@ -301,7 +322,7 @@ export class SupabaseLeaderboardProvider extends LocalLeaderboardProvider {
         this.fetchTopRun(courseId),
       ]);
       this.lastRemoteError = null;
-      this.entries = { ...this.entries, [courseId]: rows.map(rowToEntry) };
+      this.entries = { ...this.entries, [courseId]: dedupeByPilot(rows.map(rowToEntry)) };
       const row = topRun ?? null;
       if (!row) return this.getRecord(courseId);
       const record = recordFromRun(row.ghost, [], 'supabase', row.player_name);
@@ -327,7 +348,7 @@ export class SupabaseLeaderboardProvider extends LocalLeaderboardProvider {
         this.fetchTopRun(sanitized.courseId),
       ]);
       this.lastRemoteError = null;
-      this.entries = { ...this.entries, [sanitized.courseId]: rows.map(rowToEntry) };
+      this.entries = { ...this.entries, [sanitized.courseId]: dedupeByPilot(rows.map(rowToEntry)) };
       const row = topRun ?? null;
       if (row) {
         const record = recordFromRun(row.ghost, [], 'supabase', row.player_name);
