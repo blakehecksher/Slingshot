@@ -119,3 +119,27 @@ Supersedes: none
 Decision: GitHub Pages deploys from pushes to `racing-time-trials` instead of `main`.
 Reason: `main` should remain available as its own development branch while the racing time-trials version is the public deployed build.
 Supersedes: 2026-05-08 2251 - Hosting: GitHub Pages via official Actions
+
+## 2026-05-14 2347 - Time-trial product outline is current scope
+
+Decision: Use `docs/spec/slingshot-time-trials-product-outline.md` as the current product outline. Focus the game on fast course entry, gravity racing, timers/splits, ghosts, leaderboards, results, HUD readability, settings, and light player identity. Defer ship selection, hangar hub, upgrades, mining, economy, combat, and story progression as active product pillars.
+Reason: The strongest near-term game is the replayable gravity time-trial loop. Ship/hangar/economy systems add design weight before the core racing loop is proven and polished.
+Supersedes: none
+
+## 2026-05-14 2355 - Lore and aesthetics stay active
+
+Decision: Keep `docs/spec/slingshot-lore-and-visual-direction.md` in the root spec folder as the active lore and aesthetic companion to the time-trial product outline.
+Reason: The racing loop should be developed with clear tone, visual language, naming, and Dead Iron fiction in mind, while keeping mining/economy/story systems deferred as gameplay pillars.
+Supersedes: none
+
+## 2026-05-17 2127 - Friend Heat mode shape
+
+Decision: Future Friend Heat multiplayer should use invite-code private lobbies, a shared heat timer, and a lobby-best ghost that starts with the first valid completed lobby run and updates only at the start of a player's next attempt. The first version should not show personal-best ghosts or global top-board ghosts inside the heat. Once the heat timer expires, existing attempts may finish and count, but no new attempts can start. Valid Friend Heat completions still submit to personal records and the global leaderboard.
+Reason: This preserves the feeling of a private friend race without discouraging players with an outside global top ghost, avoids confusing mid-attempt ghost swaps, and still lets excellent heat runs become public leaderboard records.
+Supersedes: none
+
+## 2026-05-18 2124 - No separate race setup or ghost results branch
+
+Decision: Remove the separate race setup screen from the active flow and keep results limited to Retry and Title Board actions. Results should show final time, personal-best time and delta, player leaderboard time and delta, number-one leaderboard time and delta, plus split details.
+Reason: The active loop should be fast and visually consistent with the title/course board. Separate ghost/result branches and setup overlays slow the loop and create confusing screens.
+Supersedes: none

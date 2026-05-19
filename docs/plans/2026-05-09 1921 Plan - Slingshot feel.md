@@ -6,7 +6,7 @@ _Created: 2026-05-09 1921_
 
 ## Goal
 
-Restore the slingshot feel that the spec promises in `docs/spec/slingshot-story-spec.md`. Right now flying past a rock feels like brake-by-gravity. Pilot should feel: distant tug = ignorable, mid-range = bend, close = real fling, too close = capture / point of no return.
+Restore the slingshot feel that the spec promises in `docs/spec/archive/slingshot-story-spec.md`. Right now flying past a rock feels like brake-by-gravity. Pilot should feel: distant tug = ignorable, mid-range = bend, close = real fling, too close = capture / point of no return.
 
 ## Diagnosis
 

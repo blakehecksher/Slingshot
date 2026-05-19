@@ -24,9 +24,18 @@ export interface ShipCommand {
   startRace: boolean;
   courseIndex: number | null;
   courseDelta: number;
+  menuUp: boolean;
+  menuDown: boolean;
+  menuLeft: boolean;
+  menuRight: boolean;
+  menuConfirm: boolean;
+  menuBack: boolean;
+  menuPause: boolean;
 }
 
 const DEADZONE = 0.12;
+const MENU_REPEAT_INITIAL_MS = 260;
+const MENU_REPEAT_INTERVAL_MS = 82;
 
 function applyDeadzone(v: number): number {
   if (Math.abs(v) < DEADZONE) return 0;
@@ -52,10 +61,20 @@ export class Input {
   private pendingLockToggle = false;
   private pendingRaceRestart = false;
   private pendingRaceStart = false;
+  private pendingMenuUp = false;
+  private pendingMenuDown = false;
+  private pendingMenuLeft = false;
+  private pendingMenuRight = false;
+  private pendingMenuBack = false;
+  private pendingMenuPause = false;
   private pendingCourseIndex: number | null = null;
 
   // Previous gamepad button states, for edge detection.
   private prevPadButtons: boolean[] = [];
+  private prevMenuDirX = 0;
+  private prevMenuDirY = 0;
+  private nextMenuRepeatX = 0;
+  private nextMenuRepeatY = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (e) => {
@@ -70,6 +89,11 @@ export class Input {
       if (e.code === 'KeyL' && !e.repeat) this.pendingLockToggle = true;
       if (e.code === 'KeyR' && !e.repeat) this.pendingRaceRestart = true;
       if (e.code === 'Enter' && !e.repeat) this.pendingRaceStart = true;
+      if (e.code === 'Escape' && !e.repeat) this.pendingMenuBack = true;
+      if (e.code === 'ArrowUp' && !e.repeat) this.pendingMenuUp = true;
+      if (e.code === 'ArrowDown' && !e.repeat) this.pendingMenuDown = true;
+      if (e.code === 'ArrowLeft' && !e.repeat) this.pendingMenuLeft = true;
+      if (e.code === 'ArrowRight' && !e.repeat) this.pendingMenuRight = true;
       if (e.code === 'Digit1' && !e.repeat) this.pendingCourseIndex = 0;
       if (e.code === 'Digit2' && !e.repeat) this.pendingCourseIndex = 1;
       if (e.code === 'Digit3' && !e.repeat) this.pendingCourseIndex = 2;
@@ -159,6 +183,13 @@ export class Input {
       startRace: false,
       courseIndex: null,
       courseDelta: 0,
+      menuUp: false,
+      menuDown: false,
+      menuLeft: false,
+      menuRight: false,
+      menuConfirm: false,
+      menuBack: false,
+      menuPause: false,
     };
 
     const pad = this.readGamepad();
@@ -167,6 +198,8 @@ export class Input {
       const ly = applyDeadzone(pad.axes[1] ?? 0);
       const rx = applyDeadzone(pad.axes[2] ?? 0);
       const ry = applyDeadzone(pad.axes[3] ?? 0);
+      const menuAxisX = Math.abs(lx) > 0.62 ? Math.sign(lx) : 0;
+      const menuAxisY = Math.abs(ly) > 0.62 ? Math.sign(ly) : 0;
 
       // L stick: primary attitude. Right stick: rudder + lift trim for
       // threading gates without taking pitch/roll off the left thumb.
@@ -194,10 +227,9 @@ export class Input {
         pad.buttons[5]?.value ?? (pad.buttons[5]?.pressed ? 1 : 0),
       );
 
-      // Y button (b3): hangar open/close (edge-triggered). Inside the
-      // hangar this is read by HangarUI.pollGamepad and ignored here.
+      // Y button (b3): cockpit/chase camera toggle.
       const yPressed = pad.buttons[3]?.pressed ?? false;
-      if (yPressed && !this.prevPadButtons[3]) cmd.toggleHangar = true;
+      if (yPressed && !this.prevPadButtons[3]) cmd.toggleCameraMode = true;
 
       // X button: cycle ship visual.
       const xPressed = pad.buttons[2]?.pressed ?? false;
@@ -207,10 +239,14 @@ export class Input {
       const aPressed = pad.buttons[0]?.pressed ?? false;
       if (aPressed) cmd.fire = true;
       if (aPressed && !this.prevPadButtons[0]) cmd.startRace = true;
+      if (aPressed && !this.prevPadButtons[0]) cmd.menuConfirm = true;
 
-      // Back/Select (b8): camera toggle.
+      const bPressed = pad.buttons[1]?.pressed ?? false;
+      if (bPressed && !this.prevPadButtons[1]) cmd.menuBack = true;
+
+      // Back/Select (b8): restart current run.
       const backPressed = pad.buttons[8]?.pressed ?? false;
-      if (backPressed && !this.prevPadButtons[8]) cmd.toggleCameraMode = true;
+      if (backPressed && !this.prevPadButtons[8]) cmd.restartRace = true;
 
       // R3 click (b11 in standard mapping; some pads expose it as b10):
       // toggle target lock-on.
@@ -220,23 +256,48 @@ export class Input {
 
       const startPressed = pad.buttons[9]?.pressed ?? false;
       if (startPressed && !this.prevPadButtons[9]) {
-        cmd.restartRace = true;
         cmd.startRace = true;
+        cmd.menuConfirm = true;
+        cmd.menuPause = true;
       }
 
+      const now = performance.now();
       const dUpPressed = pad.buttons[12]?.pressed ?? false;
       const dDownPressed = pad.buttons[13]?.pressed ?? false;
       const dLeftPressed = pad.buttons[14]?.pressed ?? false;
       const dRightPressed = pad.buttons[15]?.pressed ?? false;
-      if ((dUpPressed && !this.prevPadButtons[12]) || (dLeftPressed && !this.prevPadButtons[14])) {
+      const menuDirX = dLeftPressed ? -1 : dRightPressed ? 1 : menuAxisX;
+      const menuDirY = dUpPressed ? -1 : dDownPressed ? 1 : menuAxisY;
+      const repeatX = this.menuRepeat(menuDirX, this.prevMenuDirX, this.nextMenuRepeatX, now);
+      const repeatY = this.menuRepeat(menuDirY, this.prevMenuDirY, this.nextMenuRepeatY, now);
+      this.nextMenuRepeatX = repeatX.nextAt;
+      this.nextMenuRepeatY = repeatY.nextAt;
+      if (repeatX.fire && menuDirX < 0) {
+        cmd.menuLeft = true;
         cmd.courseDelta -= 1;
       }
-      if ((dDownPressed && !this.prevPadButtons[13]) || (dRightPressed && !this.prevPadButtons[15])) {
+      if (repeatX.fire && menuDirX > 0) {
+        cmd.menuRight = true;
+        cmd.courseDelta += 1;
+      }
+      if (repeatY.fire && menuDirY < 0) {
+        cmd.menuUp = true;
+        cmd.courseDelta -= 1;
+      }
+      if (repeatY.fire && menuDirY > 0) {
+        cmd.menuDown = true;
         cmd.courseDelta += 1;
       }
 
       // Snapshot button states for next frame.
       this.prevPadButtons = pad.buttons.map((b) => b.pressed);
+      this.prevMenuDirX = menuDirX;
+      this.prevMenuDirY = menuDirY;
+    } else {
+      this.prevMenuDirX = 0;
+      this.prevMenuDirY = 0;
+      this.nextMenuRepeatX = 0;
+      this.nextMenuRepeatY = 0;
     }
 
     // Keyboard, jet-pilot mapping. No strafe — point and thrust.
@@ -299,7 +360,32 @@ export class Input {
     }
     if (this.pendingRaceStart) {
       cmd.startRace = true;
+      cmd.menuConfirm = true;
       this.pendingRaceStart = false;
+    }
+    if (this.pendingMenuUp) {
+      cmd.menuUp = true;
+      this.pendingMenuUp = false;
+    }
+    if (this.pendingMenuDown) {
+      cmd.menuDown = true;
+      this.pendingMenuDown = false;
+    }
+    if (this.pendingMenuLeft) {
+      cmd.menuLeft = true;
+      this.pendingMenuLeft = false;
+    }
+    if (this.pendingMenuRight) {
+      cmd.menuRight = true;
+      this.pendingMenuRight = false;
+    }
+    if (this.pendingMenuBack) {
+      cmd.menuBack = true;
+      this.pendingMenuBack = false;
+    }
+    if (this.pendingMenuPause) {
+      cmd.menuPause = true;
+      this.pendingMenuPause = false;
     }
     if (this.pendingCourseIndex !== null) {
       cmd.courseIndex = this.pendingCourseIndex;
@@ -320,6 +406,13 @@ export class Input {
 
   isPointerLocked(): boolean {
     return this.pointerLocked;
+  }
+
+  private menuRepeat(dir: number, prevDir: number, nextAt: number, now: number): { fire: boolean; nextAt: number } {
+    if (dir === 0) return { fire: false, nextAt: 0 };
+    if (dir !== prevDir) return { fire: true, nextAt: now + MENU_REPEAT_INITIAL_MS };
+    if (now >= nextAt) return { fire: true, nextAt: now + MENU_REPEAT_INTERVAL_MS };
+    return { fire: false, nextAt };
   }
 }
 

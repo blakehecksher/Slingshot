@@ -27,6 +27,10 @@ export class TrajectoryRibbon {
     scene.add(this.line);
   }
 
+  setVisible(visible: boolean): void {
+    this.line.visible = visible;
+  }
+
   update(trajectory: Trajectory, visualStart?: THREE.Vector3): void {
     const count = Math.min(MAX_POINTS, trajectory.points.length);
     for (let i = 0; i < count; i++) {

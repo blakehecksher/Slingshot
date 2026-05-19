@@ -4,6 +4,11 @@ import { buildShipVariant } from '../../render/shipVisual';
 import type { GhostRun, GhostSample } from './leaderboard';
 
 const SAMPLE_INTERVAL = 1 / 15;
+const DEFAULT_GHOST_COLOR = 0x6dd6ff;
+
+interface GhostReplayOptions {
+  readonly color?: number;
+}
 
 export class GhostRecorder {
   private samples: GhostSample[] = [];
@@ -33,10 +38,14 @@ export class GhostRecorder {
 
 export class GhostReplay {
   private root: THREE.Object3D;
+  private glow: THREE.Sprite;
   private run: GhostRun | null = null;
   private lastPosition = new THREE.Vector3();
+  private color: number;
+  private opacity = 0.34;
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Scene, options: GhostReplayOptions = {}) {
+    this.color = options.color ?? DEFAULT_GHOST_COLOR;
     const built = buildShipVariant('sparrow');
     this.root = built.root;
     this.root.visible = false;
@@ -45,35 +54,60 @@ export class GhostReplay {
       const mesh = obj as THREE.Mesh;
       if (!mesh.isMesh) return;
       const material = new THREE.MeshBasicMaterial({
-        color: 0x6dd6ff,
+        color: this.color,
         transparent: true,
-        opacity: 0.34,
+        opacity: this.opacity,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         toneMapped: false,
       });
       mesh.material = material;
     });
+    this.glow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: createGlowTexture(this.color),
+      color: this.color,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }));
+    this.glow.visible = false;
+    scene.add(this.glow);
     scene.add(this.root);
   }
 
   setRun(run: GhostRun | null): void {
     this.run = run;
     this.root.visible = false;
+    this.glow.visible = false;
   }
 
   reset(): void {
     this.root.visible = false;
+    this.glow.visible = false;
   }
 
-  update(timeSec: number): void {
+  setOpacity(opacity: number): void {
+    this.opacity = Math.max(0.08, Math.min(0.85, opacity * 0.48));
+    this.root.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const material = mesh.material;
+      if (material instanceof THREE.MeshBasicMaterial) material.opacity = this.opacity;
+    });
+  }
+
+  update(timeSec: number, viewerPosition?: THREE.Vector3): void {
     if (!this.run || this.run.samples.length < 2) {
       this.root.visible = false;
+      this.glow.visible = false;
       return;
     }
     const samples = this.run.samples;
     if (timeSec < samples[0].t || timeSec > samples[samples.length - 1].t) {
       this.root.visible = false;
+      this.glow.visible = false;
       return;
     }
 
@@ -97,10 +131,22 @@ export class GhostReplay {
     this.root.quaternion.copy(qa.slerp(qb, t));
     this.lastPosition.copy(this.root.position);
     this.root.visible = true;
+    this.updateGlow(viewerPosition);
   }
 
   get position(): THREE.Vector3 | null {
     return this.root.visible ? this.lastPosition : null;
+  }
+
+  private updateGlow(viewerPosition?: THREE.Vector3): void {
+    this.glow.position.copy(this.root.position);
+    this.glow.visible = true;
+    const distance = viewerPosition ? viewerPosition.distanceTo(this.root.position) : 0;
+    const far = Math.max(0, Math.min(1, (distance - 90) / 260));
+    const scale = 8 + far * 30;
+    this.glow.scale.setScalar(scale);
+    const material = this.glow.material as THREE.SpriteMaterial;
+    material.opacity = 0.08 + far * 0.28;
   }
 }
 
@@ -116,3 +162,21 @@ function sampleShip(timeSec: number, ship: Ship, checkpointIndex: number): Ghost
   };
 }
 
+function createGlowTexture(color: number): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return new THREE.CanvasTexture(canvas);
+  const hex = `#${color.toString(16).padStart(6, '0')}`;
+  const gradient = ctx.createRadialGradient(64, 64, 3, 64, 64, 62);
+  gradient.addColorStop(0, hex);
+  gradient.addColorStop(0.22, `${hex}cc`);
+  gradient.addColorStop(0.58, `${hex}45`);
+  gradient.addColorStop(1, `${hex}00`);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 128, 128);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}

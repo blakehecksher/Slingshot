@@ -2,59 +2,82 @@ import * as THREE from 'three';
 import type { Asteroid } from '../game/asteroids';
 import type { Trajectory } from '../game/trajectory';
 
-const MAX_ASTEROIDS = 140;
+const MAX_ASTEROIDS = 160;
 const MAX_POINTS = 220;
-const MAP_RADIUS = 1450;
+const MAP_RANGE = 1450;
+const HOLO_RADIUS = 420;
+
+export interface MinimapGhostMarkers {
+  readonly top?: THREE.Vector3 | null;
+  readonly personal?: THREE.Vector3 | null;
+}
 
 export class Minimap {
   private scene = new THREE.Scene();
-  private camera = new THREE.OrthographicCamera(-MAP_RADIUS, MAP_RADIUS, MAP_RADIUS, -MAP_RADIUS, 1, 5000);
+  private camera = new THREE.PerspectiveCamera(34, 1, 1, 5000);
+  private root = new THREE.Group();
   private asteroidMeshes: THREE.Mesh[] = [];
   private ship: THREE.Mesh;
+  private shipNeedle: THREE.Line;
   private pathLine: THREE.Line;
   private checkpointMarker: THREE.Mesh;
   private finishMarker: THREE.Mesh;
-  private ghostMarker: THREE.Mesh;
+  private topGhostMarker: THREE.Mesh;
+  private personalGhostMarker: THREE.Mesh;
   private pathPositions = new Float32Array(MAX_POINTS * 3);
   private pathColors = new Float32Array(MAX_POINTS * 3);
   private pathPositionAttr = new THREE.BufferAttribute(this.pathPositions, 3);
   private pathColorAttr = new THREE.BufferAttribute(this.pathColors, 3);
 
   constructor() {
-    this.scene.background = new THREE.Color(0x080a10);
-    this.camera.position.set(0, 2600, 0);
+    this.scene.background = new THREE.Color(0x050708);
+    this.scene.add(this.root);
+    this.camera.position.set(560, 520, 820);
     this.camera.lookAt(0, 0, 0);
 
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(MAP_RADIUS * 0.998, MAP_RADIUS, 96),
-      new THREE.MeshBasicMaterial({ color: 0x8a6240, transparent: true, opacity: 0.55, side: THREE.DoubleSide }),
-    );
-    ring.rotation.x = -Math.PI / 2;
-    this.scene.add(ring);
+    const globe = new THREE.Group();
+    globe.add(this.gridCircle('xy', HOLO_RADIUS, 0x2a8c80, 0.32));
+    globe.add(this.gridCircle('xz', HOLO_RADIUS, 0x2a8c80, 0.22));
+    globe.add(this.gridCircle('yz', HOLO_RADIUS, 0x2a8c80, 0.22));
+    for (const y of [-0.65, -0.33, 0.33, 0.65]) {
+      const lat = this.gridCircle('xz', HOLO_RADIUS * Math.sqrt(1 - y * y), 0x2a8c80, 0.13);
+      lat.position.y = HOLO_RADIUS * y;
+      globe.add(lat);
+    }
+    for (let i = 0; i < 8; i++) {
+      const lon = this.gridCircle('yz', HOLO_RADIUS, 0x2a8c80, 0.13);
+      lon.rotation.y = (Math.PI / 8) * i;
+      globe.add(lon);
+    }
+    this.root.add(globe);
 
-    const asteroidGeom = new THREE.CircleGeometry(1, 24);
+    const asteroidGeom = new THREE.SphereGeometry(1, 10, 8);
     for (let i = 0; i < MAX_ASTEROIDS; i++) {
       const mesh = new THREE.Mesh(
         asteroidGeom,
-        new THREE.MeshBasicMaterial({ color: 0x7d7469, transparent: true, opacity: 0.55, side: THREE.DoubleSide }),
+        new THREE.MeshBasicMaterial({ color: 0xc27d37, transparent: true, opacity: 0.58 }),
       );
-      mesh.rotation.x = -Math.PI / 2;
       mesh.visible = false;
       this.asteroidMeshes.push(mesh);
-      this.scene.add(mesh);
+      this.root.add(mesh);
     }
 
-    const shipGeom = new THREE.BufferGeometry();
-    shipGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-      0, 0, -44,
-      -28, 0, 32,
-      28, 0, 32,
-    ]), 3));
     this.ship = new THREE.Mesh(
-      shipGeom,
-      new THREE.MeshBasicMaterial({ color: 0xeae0c8, side: THREE.DoubleSide }),
+      new THREE.ConeGeometry(16, 46, 3),
+      new THREE.MeshBasicMaterial({ color: 0xede3cc, transparent: true, opacity: 0.96 }),
     );
-    this.scene.add(this.ship);
+    this.ship.rotation.x = Math.PI / 2;
+    this.root.add(this.ship);
+
+    const needleGeom = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, -70),
+    ]);
+    this.shipNeedle = new THREE.Line(
+      needleGeom,
+      new THREE.LineBasicMaterial({ color: 0xede3cc, transparent: true, opacity: 0.62 }),
+    );
+    this.root.add(this.shipNeedle);
 
     const pathGeom = new THREE.BufferGeometry();
     pathGeom.setAttribute('position', this.pathPositionAttr);
@@ -62,31 +85,14 @@ export class Minimap {
     pathGeom.setDrawRange(0, 0);
     this.pathLine = new THREE.Line(
       pathGeom,
-      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9 }),
+      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.92 }),
     );
-    this.scene.add(this.pathLine);
+    this.root.add(this.pathLine);
 
-    const markerGeom = new THREE.RingGeometry(18, 28, 24);
-    this.checkpointMarker = new THREE.Mesh(
-      markerGeom,
-      new THREE.MeshBasicMaterial({ color: 0x6dd6c8, transparent: true, opacity: 0.92, side: THREE.DoubleSide }),
-    );
-    this.checkpointMarker.rotation.x = -Math.PI / 2;
-    this.scene.add(this.checkpointMarker);
-
-    this.finishMarker = new THREE.Mesh(
-      markerGeom,
-      new THREE.MeshBasicMaterial({ color: 0xd06424, transparent: true, opacity: 0.88, side: THREE.DoubleSide }),
-    );
-    this.finishMarker.rotation.x = -Math.PI / 2;
-    this.scene.add(this.finishMarker);
-
-    this.ghostMarker = new THREE.Mesh(
-      new THREE.CircleGeometry(18, 18),
-      new THREE.MeshBasicMaterial({ color: 0x6dd6ff, transparent: true, opacity: 0.72, side: THREE.DoubleSide }),
-    );
-    this.ghostMarker.rotation.x = -Math.PI / 2;
-    this.scene.add(this.ghostMarker);
+    this.checkpointMarker = this.marker(0x5dff9a, 20, 0.92);
+    this.finishMarker = this.marker(0xd4921f, 22, 0.88);
+    this.topGhostMarker = this.marker(0x6dd6ff, 16, 0.78);
+    this.personalGhostMarker = this.marker(0xff9b32, 16, 0.78);
   }
 
   update(
@@ -97,7 +103,7 @@ export class Minimap {
     markers?: {
       nextCheckpoint?: THREE.Vector3 | null;
       finish?: THREE.Vector3 | null;
-      ghost?: THREE.Vector3 | null;
+      ghosts?: MinimapGhostMarkers;
     },
   ): void {
     for (let i = 0; i < this.asteroidMeshes.length; i++) {
@@ -107,36 +113,81 @@ export class Minimap {
         mesh.visible = false;
         continue;
       }
-      const x = asteroid.position.x - shipPosition.x;
-      const z = asteroid.position.z - shipPosition.z;
-      const inRange = Math.abs(x) < MAP_RADIUS && Math.abs(z) < MAP_RADIUS;
-      mesh.visible = inRange;
-      if (inRange) {
-        mesh.position.set(x, 0, z);
-        const s = Math.max(10, asteroid.radius);
-        mesh.scale.set(s, s, 1);
+      const projected = this.projectRelative(asteroid.position, shipPosition);
+      mesh.visible = projected.visible;
+      if (projected.visible) {
+        mesh.position.copy(projected.position);
+        const s = Math.max(3.5, Math.min(28, asteroid.radius * 0.18));
+        mesh.scale.setScalar(s);
       }
     }
 
-    this.ship.rotation.y = shipYaw;
+    this.ship.rotation.z = shipYaw;
+    this.shipNeedle.rotation.y = shipYaw;
     this.updateMarker(this.checkpointMarker, markers?.nextCheckpoint ?? null, shipPosition);
     this.updateMarker(this.finishMarker, markers?.finish ?? null, shipPosition);
-    this.updateMarker(this.ghostMarker, markers?.ghost ?? null, shipPosition);
+    this.updateMarker(this.topGhostMarker, markers?.ghosts?.top ?? null, shipPosition);
+    this.updateMarker(this.personalGhostMarker, markers?.ghosts?.personal ?? null, shipPosition);
 
     const count = Math.min(MAX_POINTS, trajectory.points.length);
     for (let i = 0; i < count; i++) {
       const point = trajectory.points[i];
-      this.pathPositions[i * 3 + 0] = point.position.x - shipPosition.x;
-      this.pathPositions[i * 3 + 1] = 4;
-      this.pathPositions[i * 3 + 2] = point.position.z - shipPosition.z;
+      const projected = this.projectRelative(point.position, shipPosition, true);
+      this.pathPositions[i * 3 + 0] = projected.position.x;
+      this.pathPositions[i * 3 + 1] = projected.position.y;
+      this.pathPositions[i * 3 + 2] = projected.position.z;
       const d = point.danger;
       this.pathColors[i * 3 + 0] = d < 0.5 ? d * 2 : 1;
-      this.pathColors[i * 3 + 1] = d < 0.5 ? 1 : 1 - (d - 0.5) * 1.8;
-      this.pathColors[i * 3 + 2] = 0.12;
+      this.pathColors[i * 3 + 1] = d < 0.5 ? 1 : Math.max(0.05, 1 - (d - 0.5) * 1.8);
+      this.pathColors[i * 3 + 2] = 0.16;
     }
     this.pathLine.geometry.setDrawRange(0, count);
     this.pathPositionAttr.needsUpdate = true;
     this.pathColorAttr.needsUpdate = true;
+  }
+
+  render(renderer: THREE.WebGLRenderer, scale = 1): void {
+    const width = renderer.domElement.clientWidth;
+    const height = renderer.domElement.clientHeight;
+    const size = Math.max(160, Math.min(320, Math.floor(Math.min(width, height) * 0.32 * scale)));
+    const x = width - size - 16;
+    const y = height - size - 16;
+
+    this.root.rotation.y += 0.0025;
+    this.camera.aspect = 1;
+    this.camera.updateProjectionMatrix();
+
+    renderer.clearDepth();
+    renderer.setScissorTest(true);
+    renderer.setViewport(x, y, size, size);
+    renderer.setScissor(x, y, size, size);
+    renderer.render(this.scene, this.camera);
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, width, height);
+  }
+
+  private gridCircle(plane: 'xy' | 'xz' | 'yz', radius: number, color: number, opacity: number): THREE.LineLoop {
+    const points: THREE.Vector3[] = [];
+    for (let i = 0; i < 128; i++) {
+      const a = (i / 128) * Math.PI * 2;
+      if (plane === 'xy') points.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius, 0));
+      else if (plane === 'xz') points.push(new THREE.Vector3(Math.cos(a) * radius, 0, Math.sin(a) * radius));
+      else points.push(new THREE.Vector3(0, Math.cos(a) * radius, Math.sin(a) * radius));
+    }
+    return new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(points),
+      new THREE.LineBasicMaterial({ color, transparent: true, opacity }),
+    );
+  }
+
+  private marker(color: number, radius: number, opacity: number): THREE.Mesh {
+    const mesh = new THREE.Mesh(
+      new THREE.OctahedronGeometry(radius, 0),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity, wireframe: true }),
+    );
+    mesh.visible = false;
+    this.root.add(mesh);
+    return mesh;
   }
 
   private updateMarker(mesh: THREE.Mesh, world: THREE.Vector3 | null, shipPosition: { x: number; y: number; z: number }): void {
@@ -144,28 +195,24 @@ export class Minimap {
       mesh.visible = false;
       return;
     }
-    const x = world.x - shipPosition.x;
-    const z = world.z - shipPosition.z;
-    const inRange = Math.abs(x) < MAP_RADIUS && Math.abs(z) < MAP_RADIUS;
-    mesh.visible = inRange;
-    if (!inRange) return;
-    mesh.position.set(x, 5, z);
+    const projected = this.projectRelative(world, shipPosition);
+    mesh.visible = projected.visible;
+    if (projected.visible) mesh.position.copy(projected.position);
   }
 
-  render(renderer: THREE.WebGLRenderer): void {
-    const width = renderer.domElement.clientWidth;
-    const height = renderer.domElement.clientHeight;
-    const mapWidth = Math.min(280, Math.floor(width * 0.28));
-    const mapHeight = Math.min(210, Math.floor(height * 0.28));
-    const x = width - mapWidth - 12;
-    const y = height - mapHeight - 12;
-
-    renderer.clearDepth();
-    renderer.setScissorTest(true);
-    renderer.setViewport(x, y, mapWidth, mapHeight);
-    renderer.setScissor(x, y, mapWidth, mapHeight);
-    renderer.render(this.scene, this.camera);
-    renderer.setScissorTest(false);
-    renderer.setViewport(0, 0, width, height);
+  private projectRelative(
+    world: { x: number; y: number; z: number },
+    shipPosition: { x: number; y: number; z: number },
+    clampToGlobe = false,
+  ): { visible: boolean; position: THREE.Vector3 } {
+    const x = world.x - shipPosition.x;
+    const y = world.y - shipPosition.y;
+    const z = world.z - shipPosition.z;
+    const distance = Math.hypot(x, y, z);
+    const visible = distance <= MAP_RANGE || clampToGlobe;
+    const scale = HOLO_RADIUS / MAP_RANGE;
+    const position = new THREE.Vector3(x * scale, y * scale, z * scale);
+    if (clampToGlobe && position.length() > HOLO_RADIUS) position.setLength(HOLO_RADIUS);
+    return { visible, position };
   }
 }

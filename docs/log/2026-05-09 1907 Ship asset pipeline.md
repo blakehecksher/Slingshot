@@ -2,7 +2,7 @@
 
 ## What was done
 
-- Wrote `docs/spec/ship-asset-pipeline.md`.
+- Wrote `docs/spec/archive/ship-asset-pipeline.md`.
 - Captured the intended ship visual fallback order: kit-built manifest, full model, primitive fallback.
 - Documented proposed folders, manifest shape, mount point requirements, AI 3D generation workflow, and future ship-builder direction.
 

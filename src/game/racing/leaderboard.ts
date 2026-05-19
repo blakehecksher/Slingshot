@@ -61,6 +61,7 @@ export interface LeaderboardProvider {
   load(): Promise<RacingSaveData>;
   setSelectedCourse(courseId: string): Promise<RacingSaveData>;
   getRecord(courseId: string): CourseRecord | null;
+  getTopRecord(courseId: string): CourseRecord | null;
   refreshCourse(courseId: string): Promise<CourseRecord | null>;
   submitRun(run: GhostRun): Promise<SubmitResult>;
   getPlayerName(): string;
@@ -139,6 +140,7 @@ function safeLocalStorageSet(key: string, value: string): void {
 export class LocalLeaderboardProvider implements LeaderboardProvider {
   protected data: RacingSaveData = emptySave();
   protected entries: Record<string, RaceLeaderboardEntry[]> = {};
+  protected topRecords: Record<string, CourseRecord> = {};
   protected playerName = normalizePlayerName();
 
   async load(): Promise<RacingSaveData> {
@@ -173,6 +175,10 @@ export class LocalLeaderboardProvider implements LeaderboardProvider {
 
   getRecord(courseId: string): CourseRecord | null {
     return this.data.records[courseId] ?? null;
+  }
+
+  getTopRecord(courseId: string): CourseRecord | null {
+    return this.topRecords[courseId] ?? null;
   }
 
   async refreshCourse(courseId: string): Promise<CourseRecord | null> {
@@ -298,10 +304,9 @@ export class SupabaseLeaderboardProvider extends LocalLeaderboardProvider {
       this.entries = { ...this.entries, [courseId]: rows.map(rowToEntry) };
       const row = topRun ?? null;
       if (!row) return this.getRecord(courseId);
-      const existing = this.getRecord(courseId);
-      const record = recordFromRun(row.ghost, existing?.recentRuns ?? [], 'supabase', row.player_name);
-      this.setRecord(record);
-      return record;
+      const record = recordFromRun(row.ghost, [], 'supabase', row.player_name);
+      this.topRecords = { ...this.topRecords, [courseId]: record };
+      return this.getRecord(courseId);
     } catch (err) {
       this.lastRemoteError = errorMessage(err);
       console.warn('[racing] remote leaderboard fetch failed', err);
@@ -325,13 +330,12 @@ export class SupabaseLeaderboardProvider extends LocalLeaderboardProvider {
       this.entries = { ...this.entries, [sanitized.courseId]: rows.map(rowToEntry) };
       const row = topRun ?? null;
       if (row) {
-        const existing = this.getRecord(sanitized.courseId);
-        const record = recordFromRun(row.ghost, existing?.recentRuns ?? [], 'supabase', row.player_name);
-        this.setRecord(record);
+        const record = recordFromRun(row.ghost, [], 'supabase', row.player_name);
+        this.topRecords = { ...this.topRecords, [sanitized.courseId]: record };
         isGlobalBest = Math.abs(row.time_sec - sanitized.timeSec) < 0.0005 && row.player_name === this.config.playerName;
         return {
           save: this.data,
-          record,
+          record: localResult.record,
           isPersonalBest: localResult.isPersonalBest,
           isGlobalBest,
         };

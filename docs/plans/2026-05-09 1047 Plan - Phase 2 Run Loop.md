@@ -7,7 +7,7 @@ _Created: 2026-05-09 1047_
 
 Phase 1 shipped (M0–M6 in `docs/plans/2026-05-08 2251 Plan - Phase 1 Gravity.md`). Flying a Newtonian gravity field feels good. User verdict on Phase 1: "liking this game and where it's headed." Remaining ship-feel and gravity tweaks are small constants — easier to tune in context with more game on screen, not in isolation.
 
-Vision loop (`docs/spec/gravity-game-vision.md`): launch → navigate → **mine → survive → return** → upgrade → go further. Phase 1 covered *navigate*. Phase 2 closes the smallest possible end-to-end loop: stakes (collisions + death), goal (mining + cargo), constraint (energy), and resolution (return to base + deposit). Without these, the field has no purpose. With them, the question becomes *is the loop fun?* — the next signal worth spending dev time on.
+Vision loop (`docs/spec/archive/gravity-game-vision.md`): launch → navigate → **mine → survive → return** → upgrade → go further. Phase 1 covered *navigate*. Phase 2 closes the smallest possible end-to-end loop: stakes (collisions + death), goal (mining + cargo), constraint (energy), and resolution (return to base + deposit). Without these, the field has no purpose. With them, the question becomes *is the loop fun?* — the next signal worth spending dev time on.
 
 Concept art in `docs/concept-images/` informs the ship art direction (Sparrow LS-17a: cream/orange/teal interceptor, deliberate silhouette) but full art pipeline is deferred. HUD stays minimal per vision; cockpit-HUD aesthetic is deferred to a later polish phase.
 

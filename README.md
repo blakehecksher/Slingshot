@@ -4,9 +4,9 @@ Browser-based 3D spaceship racing game about momentum, gravity wells, and clean 
 
 Specs in `docs/spec/`:
 
-- `gravity-game-vision.md` - what the gravity flight should feel like.
-- `slingshot-story-spec.md` - Dead Iron, the field, and the working-field fiction.
-- `ship-asset-pipeline.md` - kit-built / full-model / primitive ship visuals.
+- `slingshot-time-trials-product-outline.md` - current product outline and active scope.
+- `slingshot-lore-and-visual-direction.md` - active Dead Iron lore, tone, naming, and visual direction.
+- `archive/` - older broad specs kept as historical/future context, not current implementation scope.
 
 ## Run it
 
@@ -73,7 +73,7 @@ The leaderboard code uses a `LeaderboardProvider` interface. Without Supabase en
 
 ## Supabase shared ghosts
 
-1. In Supabase SQL Editor, run `docs/supabase-racing.sql`.
+1. In Supabase SQL Editor, run `docs/database/supabase-racing.sql`.
 2. Copy `.env.example` to `.env.local`.
 3. Fill in:
 
