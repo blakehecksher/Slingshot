@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { PhysicsWorld } from '../physics/world';
 import { COL_ASTEROID, COL_SHIP, ContactRegistry, interactionGroups } from './collision';
+import type { CourseGravityAnchor } from './racing/courseAuthoring';
 
 export interface Asteroid {
   readonly mesh: THREE.Mesh;
@@ -23,6 +24,10 @@ export type AsteroidTuningPatch = Partial<typeof ASTEROID_TUNING>;
 // AsteroidField.regenerate() to apply changes to existing runs.
 export const ASTEROID_TUNING = {
   PROCEDURAL_COUNT: 900,
+  VISUAL_COUNT: 0,
+  VISUAL_RADIUS_MIN: 10,
+  VISUAL_RADIUS_RANGE: 150,
+  VISUAL_RADIUS_POWER: 1.65,
   RADIUS_MIN: 8,
   RADIUS_RANGE: 240,
   // Lower power = flatter distribution = more medium and large rocks.
@@ -83,13 +88,20 @@ const DEAD_IRON_MATERIAL = new THREE.MeshBasicMaterial({
   toneMapped: false,
 });
 
+const visualMatrix = new THREE.Matrix4();
+const visualQuat = new THREE.Quaternion();
+const visualScale = new THREE.Vector3();
+const visualEuler = new THREE.Euler();
+const visualColor = new THREE.Color();
+
 function seededNoise(n: number): number {
   const s = Math.sin(n * 12.9898) * 43758.5453;
   return s - Math.floor(s);
 }
 
 function buildAsteroidGeometry(radius: number, seed: number): THREE.BufferGeometry {
-  const geom = new THREE.IcosahedronGeometry(radius, 3);
+  const detail = ASTEROID_TUNING.PROCEDURAL_COUNT > 3500 ? 1 : ASTEROID_TUNING.PROCEDURAL_COUNT > 1800 ? 2 : 3;
+  const geom = new THREE.IcosahedronGeometry(radius, detail);
   const pos = geom.getAttribute('position') as THREE.BufferAttribute;
   const v = new THREE.Vector3();
 
@@ -112,7 +124,8 @@ function addMineralGlints(mesh: THREE.Mesh, radius: number, seed: number, coreDe
   if (radius < 42) return;
 
   const densityT = Math.max(0, Math.min(1, (coreDensity - ASTEROID_TUNING.CORE_DENSITY_MIN) / ASTEROID_TUNING.CORE_DENSITY_RANGE));
-  const count = Math.min(14, 2 + Math.floor(radius / 34) + Math.floor(densityT * 5));
+  const maxGlints = ASTEROID_TUNING.PROCEDURAL_COUNT > 3500 ? 5 : 14;
+  const count = Math.min(maxGlints, 2 + Math.floor(radius / 34) + Math.floor(densityT * 5));
   const geom = new THREE.SphereGeometry(1, 8, 6);
   const normal = new THREE.Vector3();
 
@@ -132,7 +145,7 @@ function addMineralGlints(mesh: THREE.Mesh, radius: number, seed: number, coreDe
   }
 
   if (densityT > 0.48) {
-    const ringCount = densityT > 0.78 ? 3 : 2;
+    const ringCount = ASTEROID_TUNING.PROCEDURAL_COUNT > 3500 ? 1 : densityT > 0.78 ? 3 : 2;
     for (let i = 0; i < ringCount; i++) {
       const ring = new THREE.Mesh(
         new THREE.TorusGeometry(radius * (0.76 + i * 0.055), Math.max(0.5, radius * 0.006), 6, 48),
@@ -161,8 +174,9 @@ function makeAsteroid(
   position: THREE.Vector3,
   seed: number,
   velocity = new THREE.Vector3(),
+  options: { coreDensity?: number; massScale?: number } = {},
 ): Asteroid {
-  const coreDensity = ASTEROID_TUNING.CORE_DENSITY_MIN + seededNoise(seed + 11) * ASTEROID_TUNING.CORE_DENSITY_RANGE;
+  const coreDensity = options.coreDensity ?? ASTEROID_TUNING.CORE_DENSITY_MIN + seededNoise(seed + 11) * ASTEROID_TUNING.CORE_DENSITY_RANGE;
   const densityT = Math.max(0, Math.min(1, (coreDensity - ASTEROID_TUNING.CORE_DENSITY_MIN) / ASTEROID_TUNING.CORE_DENSITY_RANGE));
   const baseMat = ASTEROID_MATERIALS[Math.floor(seed) % ASTEROID_MATERIALS.length];
   const mat = baseMat.clone();
@@ -191,7 +205,7 @@ function makeAsteroid(
     position: position.clone(),
     velocity: velocity.clone(),
     radius,
-    mass: massForRadius(radius, coreDensity),
+    mass: massForRadius(radius, coreDensity) * (options.massScale ?? 1),
     coreDensity,
     rotationAxis: new THREE.Vector3(
       seededNoise(seed + 1) * 2 - 1,
@@ -212,13 +226,18 @@ export class AsteroidField {
   private physics: PhysicsWorld;
   private registry: ContactRegistry;
   private seedBase: number;
+  private gravityAnchors: readonly CourseGravityAnchor[];
+  private visualField: THREE.InstancedMesh | null = null;
 
-  constructor(scene: THREE.Scene, physics: PhysicsWorld, registry: ContactRegistry, seedBase = 200) {
+  constructor(scene: THREE.Scene, physics: PhysicsWorld, registry: ContactRegistry, seedBase = 200, gravityAnchors: readonly CourseGravityAnchor[] = []) {
     this.scene = scene;
     this.physics = physics;
     this.registry = registry;
     this.seedBase = seedBase;
+    this.gravityAnchors = gravityAnchors;
     this.addProcedural();
+    this.addGravityAnchors(this.gravityAnchors);
+    this.addVisualProcedural();
   }
 
   update(dt: number): void {
@@ -232,9 +251,11 @@ export class AsteroidField {
 
   /** Tear down + rebuild the field. Used by tuning panel after editing
    *  ASTEROID_TUNING. Existing trajectory ribbon will refresh next frame. */
-  regenerate(seedBase = this.seedBase, tuning?: AsteroidTuningPatch): void {
+  regenerate(seedBase = this.seedBase, tuning?: AsteroidTuningPatch, gravityAnchors?: readonly CourseGravityAnchor[]): void {
     this.seedBase = seedBase;
+    if (gravityAnchors) this.gravityAnchors = gravityAnchors;
     if (tuning) Object.assign(ASTEROID_TUNING, tuning);
+    this.disposeVisualField();
     for (const a of this.asteroids) {
       this.registry.unregister(a.colliderHandle);
       this.physics.world.removeRigidBody(a.body);
@@ -243,6 +264,8 @@ export class AsteroidField {
     }
     this.asteroids.length = 0;
     this.addProcedural();
+    this.addGravityAnchors(this.gravityAnchors);
+    this.addVisualProcedural();
   }
 
   private addProcedural(): void {
@@ -274,5 +297,89 @@ export class AsteroidField {
       ).multiplyScalar(driftScale);
       this.asteroids.push(makeAsteroid(this.scene, this.physics, this.registry, radius, new THREE.Vector3(x, y, z), seed, velocity));
     }
+  }
+
+  private addGravityAnchors(anchors: readonly CourseGravityAnchor[]): void {
+    anchors.forEach((anchor, index) => {
+      const seed = this.seedBase + 9000 + index * 41.3;
+      const [x, y, z] = anchor.position;
+      const [vx, vy, vz] = anchor.drift ?? [0, 0, 0];
+      const visualT = Math.max(0, Math.min(1, anchor.visualIntensity));
+      const coreDensity = ASTEROID_TUNING.CORE_DENSITY_MIN + ASTEROID_TUNING.CORE_DENSITY_RANGE * visualT;
+      this.asteroids.push(makeAsteroid(
+        this.scene,
+        this.physics,
+        this.registry,
+        anchor.radius,
+        new THREE.Vector3(x, y, z),
+        seed,
+        new THREE.Vector3(vx, vy, vz),
+        { coreDensity, massScale: anchor.massScale },
+      ));
+    });
+  }
+
+  private addVisualProcedural(): void {
+    const t = ASTEROID_TUNING;
+    if (t.VISUAL_COUNT <= 0) return;
+
+    const geometry = new THREE.IcosahedronGeometry(1, 1);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x655d53,
+      roughness: 0.92,
+      metalness: 0.08,
+      vertexColors: true,
+    });
+    const mesh = new THREE.InstancedMesh(geometry, material, t.VISUAL_COUNT);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.frustumCulled = true;
+
+    for (let i = 0; i < t.VISUAL_COUNT; i++) {
+      const seed = this.seedBase + 50000 + i * 17.31;
+      const sizeRoll = seededNoise(seed);
+      const u = seededNoise(seed + 1);
+      const v = seededNoise(seed + 2);
+      const wRoll = seededNoise(seed + 3);
+      const theta = u * Math.PI * 2;
+      const phi = Math.acos(2 * v - 1);
+      const radialT = Math.pow(wRoll, t.RADIAL_BIAS);
+      const r = t.SPHERE_INNER + (t.SPHERE_OUTER - t.SPHERE_INNER) * radialT;
+      const radius = t.VISUAL_RADIUS_MIN + Math.pow(sizeRoll, t.VISUAL_RADIUS_POWER) * t.VISUAL_RADIUS_RANGE;
+      const x = r * Math.sin(phi) * Math.cos(theta);
+      const y = r * Math.sin(phi) * Math.sin(theta);
+      const z = r * Math.cos(phi);
+
+      visualEuler.set(
+        seededNoise(seed + 4) * Math.PI,
+        seededNoise(seed + 5) * Math.PI,
+        seededNoise(seed + 6) * Math.PI,
+      );
+      visualQuat.setFromEuler(visualEuler);
+      visualScale.setScalar(radius);
+      visualMatrix.compose(new THREE.Vector3(x, y, z), visualQuat, visualScale);
+      mesh.setMatrixAt(i, visualMatrix);
+
+      const densityT = seededNoise(seed + 7);
+      visualColor.set(densityT > 0.74 ? 0x3c4149 : densityT > 0.52 ? 0x6f5f4f : 0x5c554d);
+      visualColor.lerp(new THREE.Color(0x231f1d), densityT * 0.36);
+      mesh.setColorAt(i, visualColor);
+    }
+
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    this.scene.add(mesh);
+    this.visualField = mesh;
+  }
+
+  private disposeVisualField(): void {
+    if (!this.visualField) return;
+    this.scene.remove(this.visualField);
+    this.visualField.geometry.dispose();
+    const material = this.visualField.material;
+    if (Array.isArray(material)) material.forEach((mat) => mat.dispose());
+    else material.dispose();
+    this.visualField = null;
   }
 }

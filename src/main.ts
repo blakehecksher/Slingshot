@@ -24,6 +24,7 @@ import { zoneFor, zoneLabel, type FieldZone } from './game/zones';
 import { initPhysics, PhysicsWorld } from './physics/world';
 import { GameAudio } from './audio/audio';
 import { TuningPanel } from './debug/tuningPanel';
+import { CourseGuideLine } from './render/courseGuideLine';
 import { SpaceDust } from './render/dust';
 import { Minimap } from './render/minimap';
 import { createRenderRig } from './render/scene';
@@ -94,13 +95,14 @@ const input = new Input(canvas);
 const registry = new ContactRegistry();
 const ship = new Ship(physics, scene);
 const dust = new SpaceDust(scene);
-const asteroidField = new AsteroidField(scene, physics, registry, selectedCourse.seed);
+const asteroidField = new AsteroidField(scene, physics, registry, selectedCourse.seed, selectedCourse.field.gravityAnchors ?? []);
+const courseGuideLine = new CourseGuideLine(scene);
 const trajectoryRibbon = new TrajectoryRibbon(scene);
 const minimap = new Minimap();
 const feedback = new GravityFeedback();
 const energy = new Energy();
 const pickups = new PickupSystem(scene, physics, registry);
-const checkpoints = new CheckpointSystem(scene, physics, registry);
+const checkpoints = new CheckpointSystem(scene);
 const race = new RaceManager();
 const ghostRecorder = new GhostRecorder();
 const topGhostReplay = new GhostReplay(scene, { color: 0x6dd6ff });
@@ -158,6 +160,7 @@ const LOOK_RATE = 1.6;
 const LOOK_RECENTER = 4.0;
 const LOOK_PITCH_LIMIT = Math.PI / 2 - 0.05;
 const REMOTE_ERROR_MAX = 180;
+const tmpTutorialAnchorPos = new THREE.Vector3();
 
 let lookYaw = 0;
 let lookPitch = 0;
@@ -177,6 +180,7 @@ let goOverlayTimer = 0;
 let boostWasActive = false;
 let audioThrustDemand = 0;
 let audioBoost = 0;
+let tutorialTipKeysShown = new Set<string>();
 
 type AppScene = 'title' | 'course' | 'race' | 'pause' | 'invalid' | 'results' | 'settings' | 'friend-entry' | 'friend-lobby' | 'friend-results';
 
@@ -347,7 +351,8 @@ async function resolveAndSwapShipVisual(): Promise<void> {
 function prepareCourse(course: RaceCourse): void {
   selectedCourse = course;
   applyCourseAsteroids(course);
-  asteroidField.regenerate(course.seed);
+  asteroidField.regenerate(course.seed, undefined, course.field.gravityAnchors ?? []);
+  courseGuideLine.setCourse(course);
   checkpoints.setCourse(course);
   const refreshSeq = ++leaderboardRefreshSeq;
   void leaderboard.setSelectedCourse(course.id).then(() => {
@@ -366,6 +371,8 @@ function prepareCourse(course: RaceCourse): void {
   peakSpeed = 0;
   accelMag = 0;
   hasPrevVelocity = false;
+  lookYaw = 0;
+  lookPitch = 0;
   currentZone = 'open';
   gravitySample = sampleGravityAt(course.startPosition, asteroidField.asteroids);
   syncGhostRuns(course.id);
@@ -397,16 +404,52 @@ function startHeatAttempt(): void {
 }
 
 function beginRace(): void {
+  // A manual restart during the post-crash fade would otherwise let the queued
+  // auto-restart fire a second countdown on top of this one.
+  crashAutoRestartPending = false;
   prepareCourse(selectedCourse);
   race.start(selectedCourse);
   goOverlayTimer = 0;
+  tutorialTipKeysShown = new Set<string>();
   ghostRecorder.reset();
   syncGhostRuns(selectedCourse.id);
   coursePanel.style.display = 'none';
   appScene = 'race';
   audio.setMusicState('race');
   audio.raceStart();
-  showToast(raceIsHeatAttempt ? 'HEAT ATTEMPT' : 'STAND BY', 900);
+  showToast(raceIsHeatAttempt ? 'HEAT ATTEMPT' : tutorialStandbyText(), 900);
+}
+
+function tutorialStandbyText(): string {
+  return shouldShowTutorialTips(selectedCourse) ? selectedCourse.tutorial?.lessonTitle ?? 'TRAINING RUN' : 'STAND BY';
+}
+
+function shouldShowTutorialTips(course: RaceCourse): boolean {
+  return Boolean(course.tutorial && !leaderboard.getRecord(course.id));
+}
+
+function showTutorialTip(key: string, text: string | undefined, durationMs = 2200): boolean {
+  if (!text || !shouldShowTutorialTips(selectedCourse) || tutorialTipKeysShown.has(key)) return false;
+  tutorialTipKeysShown.add(key);
+  showToast(text, durationMs);
+  return true;
+}
+
+function checkTutorialProximityTips(): void {
+  const tips = selectedCourse.tutorial?.tipTriggers.proximity;
+  if (!tips || !shouldShowTutorialTips(selectedCourse)) return;
+  const shipPos = ship.position;
+  for (const tip of tips) {
+    const key = `anchor:${tip.anchorId}`;
+    if (tutorialTipKeysShown.has(key)) continue;
+    const anchor = selectedCourse.field.gravityAnchors?.find((a) => a.id === tip.anchorId);
+    if (!anchor) continue;
+    tmpTutorialAnchorPos.set(anchor.position[0], anchor.position[1], anchor.position[2]);
+    if (tmpTutorialAnchorPos.distanceTo(shipPos) <= tip.range) {
+      showTutorialTip(key, tip.text, 2500);
+      return;
+    }
+  }
 }
 
 async function finishRace(): Promise<void> {
@@ -445,6 +488,7 @@ async function finishRace(): Promise<void> {
   syncGhostRuns(finish.courseId);
   showToast(finishMessage, 3000);
   appScene = 'results';
+  input.releasePointerLock();
   resultsActionIndex = 0;
   renderAppScene(finishMessage, result.record);
   if (heatAttempt && friendHeat?.current) {
@@ -513,6 +557,9 @@ function setAppScene(scene: AppScene, message = menuMessage): void {
     coursePanel.style.display = 'none';
     return;
   }
+  // Any non-cockpit scene is an HTML menu — free the cursor so it's clickable
+  // and stop the (frozen) ship from banking stale mouse input.
+  input.releasePointerLock();
   if (scene === 'results' || scene === 'invalid') audio.setMusicState('results');
   else audio.setMusicState('menu');
   renderAppScene(message);
@@ -539,11 +586,12 @@ function isSceneHoldingPhysics(): boolean {
 }
 
 function handleAppInput(cmd: ShipCommand): void {
-  if (cmd.menuUp || cmd.menuDown || cmd.menuLeft || cmd.menuRight) audio.menuMove();
-  if (cmd.menuConfirm || cmd.startRace) audio.menuConfirm();
-  if (cmd.menuBack) audio.menuBack();
-
-  if (cmd.courseIndex !== null && race.state !== 'racing' && race.state !== 'countdown') {
+  if (
+    cmd.courseIndex !== null &&
+    (appScene === 'title' || appScene === 'course') &&
+    race.state !== 'racing' &&
+    race.state !== 'countdown'
+  ) {
     appScene = 'course';
     selectCourse(cmd.courseIndex);
     return;
@@ -559,6 +607,10 @@ function handleAppInput(cmd: ShipCommand): void {
     if (cmd.menuPause || cmd.menuBack) pauseRace();
     return;
   }
+
+  if (cmd.menuUp || cmd.menuDown || cmd.menuLeft || cmd.menuRight) audio.menuMove();
+  if (cmd.menuConfirm || cmd.startRace) audio.menuConfirm();
+  if (cmd.menuBack) audio.menuBack();
 
   if (appScene === 'pause') {
     handlePauseInput(cmd);
@@ -1036,7 +1088,9 @@ function tickPhysics(): void {
   if (raceEvent.started) {
     ship.setFrozen(false);
     goOverlayTimer = 0.75;
-    showToast('GO', 700);
+    if (!showTutorialTip('start', selectedCourse.tutorial?.tipTriggers.start, 2400)) {
+      showToast('GO', 700);
+    }
   }
 
   if (race.state !== 'racing') {
@@ -1050,6 +1104,7 @@ function tickPhysics(): void {
   const p = ship.position;
   shipPosVec.set(p.x, p.y, p.z);
   gravitySample = sampleGravityAt(shipPosVec, asteroidField.asteroids);
+  checkTutorialProximityTips();
   ship.setAmbientPull(gravitySample.strongestPull);
   ship.setCargoFraction(0);
   ship.applyAcceleration(gravitySample.acceleration, FIXED_DT);
@@ -1067,6 +1122,23 @@ function tickPhysics(): void {
 
   physics.step();
   asteroidField.update(FIXED_DT);
+
+  // Gate detection is a swept plane-crossing test over this step's travel
+  // (p = pre-step, ship.position = post-step): tunnel-proof at any speed and
+  // only counts flying through the ring's hole, not skimming its edge.
+  const gateIdx = race.nextCheckpoint;
+  if (checkpoints.passedGate(gateIdx, p, ship.position)) {
+    const accepted = race.checkpoint(gateIdx);
+    if (accepted.accepted) {
+      const gate = selectedCourse.gates[gateIdx];
+      audio.pickupChime();
+      if (accepted.finished) void finishRace();
+      else if (!showTutorialTip(`gate:${gateIdx}`, selectedCourse.tutorial?.tipTriggers.gates?.[gateIdx], 2200)) {
+        showToast(`${gateIdx + 1}/${selectedCourse.gates.length}  ${gate.label}`, 1000);
+      }
+    }
+  }
+
   checkpoints.update(FIXED_DT, race.nextCheckpoint);
   ghostRecorder.update(race.elapsedSec, ship, race.nextCheckpoint);
   ghostViewerPos.set(ship.position.x, ship.position.y, ship.position.z);
@@ -1098,18 +1170,6 @@ function tickPhysics(): void {
     if (!started) return;
     const k1 = registry.lookup(h1);
     const k2 = registry.lookup(h2);
-    const checkpoint = k1?.type === 'checkpoint' ? k1 : k2?.type === 'checkpoint' ? k2 : null;
-    if (checkpoint) {
-      const accepted = race.checkpoint(checkpoint.index);
-      if (accepted.accepted) {
-        const gate = selectedCourse.gates[checkpoint.index];
-        audio.pickupChime();
-        if (accepted.finished) void finishRace();
-        else showToast(`${checkpoint.index + 1}/${selectedCourse.gates.length}  ${gate.label}`, 1000);
-      }
-      return;
-    }
-
     const other = isShipCollider(h1) ? k2 : isShipCollider(h2) ? k1 : null;
     if (other?.type === 'asteroid' && lifecycle.isAlive()) {
       audio.dustImpact(Math.max(0.35, Math.min(1.4, preStepSpeed / 160)));
@@ -1320,6 +1380,7 @@ function renderAppScene(message = menuMessage, recordOverride?: CourseRecord): v
   coursePanel.style.display = '';
   wireSceneEvents();
   if (appScene === 'settings') scrollSettingsFocusIntoView();
+  if (appScene === 'title' || appScene === 'course') scrollSelectedCourseIntoView();
 }
 
 function renderTitleScene(_message: string): string {
@@ -1766,15 +1827,17 @@ function courseButton(course: RaceCourse, index: number, compact = false): strin
 
 function startCourseRow(course: RaceCourse, index: number): string {
   const selected = course.id === selectedCourse.id ? ' selected' : '';
+  const training = course.tutorial ? ' training' : '';
   const topRecord = leaderboard.getTopRecord(course.id);
   const personalRecord = leaderboard.getRecord(course.id);
   const best = topRecord?.bestTimeSec ?? personalRecord?.bestTimeSec ?? null;
-  return `<button class="start-course-row${selected}" data-course="${index}">
+  return `<button class="start-course-row${selected}${training}" data-course="${index}">
     <span class="start-course-title">
       <em>${String(index + 1).padStart(2, '0')}</em>
       <strong>${escapeHtml(course.name)}</strong>
+      ${course.tutorial ? '<b class="training-badge">Training</b>' : ''}
     </span>
-    <small>${escapeHtml(course.summary)}</small>
+    <small>${escapeHtml(course.tutorial?.lessonSummary ?? course.summary)}</small>
     <span class="start-course-meta">
       <em>${escapeHtml(difficultyLabel(course))}</em>
       <em>${course.gates.length} gates</em>
@@ -1903,12 +1966,17 @@ function biomeLabel(course: RaceCourse): string {
 }
 
 function difficultyLabel(course: RaceCourse): string {
+  if (course.tutorial) return `Training ${course.tutorial.trainingOrder}`;
   if (course.design.difficulty <= 1) return 'Starter';
   if (course.design.difficulty <= 3) return 'Medium';
   return 'Expert';
 }
 
 function gravityLabel(course: RaceCourse): string {
+  const asteroidCount = course.asteroidTuning.PROCEDURAL_COUNT ?? RACE_ASTEROID_DEFAULTS.PROCEDURAL_COUNT ?? 0;
+  if (course.field.gravityAnchorCount <= 0 && asteroidCount <= 0) return 'None';
+  if (course.tutorial && course.field.gravityAnchorCount <= 0) return 'Low';
+  if (course.tutorial) return course.field.gravityAnchorCount === 1 ? 'Soft pull' : 'Hook pull';
   if (course.design.biome === 'open-claim-space') return 'Low';
   if (course.design.biome === 'dead-iron-belt') return 'Moderate';
   return 'Extreme';
@@ -1951,6 +2019,14 @@ function scrollSettingsFocusIntoView(): void {
   });
 }
 
+function scrollSelectedCourseIntoView(): void {
+  requestAnimationFrame(() => {
+    coursePanel
+      .querySelector<HTMLButtonElement>('.start-course-row.selected')
+      ?.scrollIntoView({ block: 'nearest' });
+  });
+}
+
 function settingValue(index: number): string {
   if (index === 0) return `${settings.stickSensitivity.toFixed(1)}x`;
   if (index === 1) return `${settings.turnRate.toFixed(1)}x`;
@@ -1969,6 +2045,7 @@ function settingValue(index: number): string {
   if (index === 14) return `${Math.round(settings.musicVolume * 100)}%`;
   if (index === 15) return settings.reducedMotion ? 'on' : 'off';
   if (index === 16) return settings.colorSafeDanger ? 'on' : 'off';
+  if (index === 17) return settings.graphicsQuality;
   if (index === SETTINGS_RESET_INDEX) return 'restore';
   return settings.graphicsQuality;
 }
@@ -2980,6 +3057,12 @@ function injectRaceStyles(): void {
       border-left-color: #d4921f;
       background: #1e1508;
     }
+    #course-select .start-course-row.training {
+      border-left-color: rgba(42, 140, 128, 0.38);
+    }
+    #course-select .start-course-row.training.selected {
+      border-left-color: #2a8c80;
+    }
     #course-select .start-course-row:hover,
     #course-select .start-course-row:focus-visible {
       outline: none;
@@ -3006,6 +3089,19 @@ function injectRaceStyles(): void {
       font-size: 15px;
       font-weight: 700;
       line-height: 1.2;
+    }
+    #course-select .training-badge {
+      display: inline-grid;
+      place-items: center;
+      min-height: 17px;
+      padding: 2px 7px;
+      border: 1px solid rgba(42, 140, 128, 0.45);
+      color: #2a8c80;
+      background: rgba(42, 140, 128, 0.08);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
     }
     #course-select .start-course-row small {
       color: #6e6250;
@@ -3941,9 +4037,22 @@ function injectRaceStyles(): void {
       background: var(--c-bg-4);
       border-left-color: var(--c-accent);
     }
+    #course-select .start-course-row.training {
+      border-left-color: rgba(42, 140, 128, 0.42);
+    }
+    #course-select .start-course-row.training.selected {
+      border-left-color: var(--c-teal);
+    }
     #course-select .start-course-title strong {
       font-size: var(--fs-md);
       letter-spacing: 0.02em;
+    }
+    #course-select .training-badge {
+      border-color: rgba(42, 140, 128, 0.54);
+      color: var(--c-teal);
+      background: rgba(42, 140, 128, 0.08);
+      font-size: 9px;
+      letter-spacing: var(--ls-label);
     }
     #course-select .start-course-row small { color: var(--c-text-muted); }
     #course-select .start-course-meta {

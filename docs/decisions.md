@@ -143,3 +143,57 @@ Supersedes: none
 Decision: Remove the separate race setup screen from the active flow and keep results limited to Retry and Title Board actions. Results should show final time, personal-best time and delta, player leaderboard time and delta, number-one leaderboard time and delta, plus split details.
 Reason: The active loop should be fast and visually consistent with the title/course board. Separate ghost/result branches and setup overlays slow the loop and create confusing screens.
 Supersedes: none
+
+## 2026-05-21 2335 - Tutorial onboarding course shape
+
+Decision: Put tutorial onboarding maps at the top of the normal course board, keep all courses unlocked, and teach with short non-pausing prompts during uncompleted tutorial runs.
+Reason: New players need a clearer first-run path without adding a separate campaign mode or slowing the existing time-trial loop.
+Supersedes: none
+
+## 2026-05-22 0018 - Controller flight defaults
+
+Decision: Default controller flight should target arcade-racing feel: left stick controls ship pitch/roll, right stick controls camera free-look, triggers control thrust/brake, bumpers boost, and D-pad remains secondary strafe. Keep leaderboard sharing unchanged for this pass because the baseline control model changes globally rather than adding optional assist classes.
+Reason: The prior right-stick yaw/vertical-strafe mapping made one thumb handle two unrelated jobs and contributed to poor controller feel. The racing loop needs recoverable, readable gravity flight before deeper physics rewrites or assist categories.
+Supersedes: none
+
+## 2026-05-22 0038 - Stick-throttle controller trial
+
+Decision: Trial a controller layout where left stick Y controls forward/reverse thrust, left stick X controls lateral strafe, right stick controls pitch/roll, LT/RT control analog yaw, LB/RB remain boost, and D-pad remains secondary strafe.
+Reason: Hands-on play found the prior arcade-racing layout still felt wrong. This trial separates translation/throttle from attitude control while preserving analog yaw and boost access for gravity racing.
+Supersedes: 2026-05-22 0018 - Controller flight defaults
+
+## 2026-05-22 0043 - Trigger roll controller trial
+
+Decision: Revise the stick-throttle controller trial so left stick Y controls forward/reverse thrust, left stick X controls lateral strafe, right stick controls pitch/yaw, LT/RT control analog roll, LB/RB remain boost, and D-pad remains secondary strafe.
+Reason: Hands-on controller feedback found RT/LT should be roll, while right stick should own pitch/yaw. This keeps translation on the left thumb and moves primary attitude aiming onto the right thumb.
+Supersedes: 2026-05-22 0038 - Stick-throttle controller trial
+
+## 2026-05-22 0049 - Configurable controller flight map
+
+Decision: Expose controller flight-axis mapping in Settings. Players can cycle left stick X/Y, right stick X/Y, LT, and RT through pitch, yaw, roll, lateral/vertical strafe, thrust, inverted variants, or disabled. The default keeps left stick thrust/strafe, right stick pitch/yaw with yaw inverted from the previous trial, and LT/RT roll.
+Reason: Repeated fixed controller trials still felt wrong in hands-on play. The fastest path to a good feel is letting the player remap axes in-game while preserving the shaped input and flight-assist stack.
+Supersedes: 2026-05-22 0043 - Trigger roll controller trial
+
+## 2026-06-05 2046 - Restore fixed controller baseline
+
+Decision: Remove the configurable controller flight map and restore the fixed baseline ship controls: left stick pitch/roll, right stick yaw/up-down, D-pad strafe, RT/LT thrust/reverse, and LB/RB boost.
+Reason: The remap experiments were not a good ship default for this branch, and the safest ship-ready base is the committed baseline controls while the course and tutorial work stays intact.
+Supersedes: 2026-05-22 0049 - Configurable controller flight map
+
+## 2026-06-05 2205 - Restore prior baseline controls
+
+Decision: Revert the left-translation / right-rotation experiment and return to the prior baseline ship controls: left stick pitch/roll, right stick yaw/up-down, D-pad strafe, RT/LT thrust/reverse, and LB/RB boost.
+Reason: The split mapping was not the intended controller feel for this branch, and reverting restores the previous ship-ready baseline while keeping the course and tutorial work intact.
+Supersedes: 2026-06-05 2046 - Restore fixed controller baseline
+
+## 2026-06-06 0143 - Reset active courses to claim-field racing
+
+Decision: Archive prior lab, tutorial, Dead Iron Sweep, and Black Core Run courses out of the active course board. Keep Claim Shakedown active, add three Claim Shakedown-style variants, and prototype a much larger point-to-point Claim Traverse course.
+Reason: Hands-on dissatisfaction points to the current course stack feeling too much like exercises. The next direction should test larger claim-field racing, short Shakedown-like variations, and a bigger point-A-to-point-B sprint with denser asteroid fields.
+Supersedes: none
+
+## 2026-06-06 0204 - Split visual asteroid density from gameplay asteroids
+
+Decision: Dense-course asteroid counts should separate real gameplay asteroids from visual-only asteroid density. Gameplay asteroids create meshes, Rapier colliders, gravity mass, trajectory influence, and minimap entries. Visual-only asteroids render through an instanced mesh and do not affect physics, gravity, trajectory prediction, or minimap sampling.
+Reason: Claim Traverse proved that thousands of real asteroids are too expensive for a large point-to-point course. The game needs the visual feeling of dense claim space without forcing every background rock into the simulation.
+Supersedes: none

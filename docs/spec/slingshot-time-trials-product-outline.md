@@ -1,7 +1,7 @@
 # Slingshot Time Trials - Product Outline
 
 _Status: active_
-_Last updated: 2026-05-18 2124_
+_Last updated: 2026-05-21 2335_
 
 ## One-line concept
 
@@ -346,7 +346,8 @@ Courses are the main content. Each course should test a specific flight skill an
 
 ### Implementation notes
 
-- Current starter courses are Claim Shakedown, Dead Iron Sweep, and Black Core Run.
+- Current onboarding courses are Clear Line, Drift Yard, Boost Run, Soft Pull, and Hook Pass.
+- Current race courses after onboarding are Claim Shakedown, Dead Iron Sweep, and Black Core Run.
 
 ---
 

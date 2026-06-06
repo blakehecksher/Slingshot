@@ -75,7 +75,6 @@ export class Input {
   private prevMenuDirY = 0;
   private nextMenuRepeatX = 0;
   private nextMenuRepeatY = 0;
-
   constructor(canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (e) => {
       if (isTextInputTarget(e.target)) return;
@@ -106,12 +105,23 @@ export class Input {
       this.keys.delete(e.code);
     });
     window.addEventListener('blur', () => this.keys.clear());
+    // Tab switches and OS overlays can swallow the matching keyup, leaving a key
+    // stuck "held" forever. Drop all held keys whenever we lose visibility.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.keys.clear();
+    });
 
     canvas.addEventListener('click', () => {
       if (!this.pointerLocked) canvas.requestPointerLock();
     });
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === canvas;
+      // Exiting lock (Esc, menu) also clears any in-flight mouse delta so a
+      // stale aim nudge doesn't apply on the next capture.
+      if (!this.pointerLocked) {
+        this.mouseDx = 0;
+        this.mouseDy = 0;
+      }
     });
     document.addEventListener('mousemove', (e) => {
       if (this.pointerLocked) {
@@ -155,7 +165,7 @@ export class Input {
   }
 
   // Build a ShipCommand for this tick.
-  // Xbox standard mapping:
+  // Gamepad mapping:
   //   L stick X (axis 0)         → roll
   //   L stick Y (axis 1)         → pitch (inverted: back = nose up)
   //   R stick X (axis 2)         → yaw / rudder
@@ -406,6 +416,11 @@ export class Input {
 
   isPointerLocked(): boolean {
     return this.pointerLocked;
+  }
+
+  /** Hand the cursor back so HTML menus are clickable when leaving the cockpit. */
+  releasePointerLock(): void {
+    if (document.pointerLockElement) document.exitPointerLock();
   }
 
   private menuRepeat(dir: number, prevDir: number, nextAt: number, now: number): { fire: boolean; nextAt: number } {

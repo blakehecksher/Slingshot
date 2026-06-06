@@ -1,12 +1,10 @@
 import * as THREE from 'three';
-import RAPIER from '@dimforge/rapier3d-compat';
-import type { PhysicsWorld } from '../../physics/world';
-import { COL_CHECKPOINT, COL_SHIP, ContactRegistry, interactionGroups } from '../collision';
 import type { RaceCourse, RaceGate } from './courses';
 
 interface GateHandle {
-  readonly body: RAPIER.RigidBody;
-  readonly colliderHandle: number;
+  readonly position: THREE.Vector3;
+  readonly normal: THREE.Vector3;
+  readonly radius: number;
   readonly group: THREE.Group;
   readonly ring: THREE.Mesh;
   readonly core: THREE.Mesh;
@@ -51,33 +49,49 @@ const NEXT_MAT = new THREE.MeshBasicMaterial({
 
 const tmpQuat = new THREE.Quaternion();
 const defaultNormal = new THREE.Vector3(0, 0, 1);
+const tmpPrev = new THREE.Vector3();
+const tmpCurr = new THREE.Vector3();
+const tmpCross = new THREE.Vector3();
+const tmpSeg = new THREE.Vector3();
 
 export class CheckpointSystem {
   private scene: THREE.Scene;
-  private physics: PhysicsWorld;
-  private registry: ContactRegistry;
   private handles: GateHandle[] = [];
   private spin = 0;
 
-  constructor(scene: THREE.Scene, physics: PhysicsWorld, registry: ContactRegistry) {
+  constructor(scene: THREE.Scene) {
     this.scene = scene;
-    this.physics = physics;
-    this.registry = registry;
   }
 
   setCourse(course: RaceCourse): void {
     this.clear();
-    course.gates.forEach((gate, index) => this.addGate(gate, index));
+    course.gates.forEach((gate) => this.addGate(gate));
     this.updateActive(0);
   }
 
   clear(): void {
     for (const handle of this.handles) {
-      this.registry.unregister(handle.colliderHandle);
-      this.physics.world.removeRigidBody(handle.body);
       this.scene.remove(handle.group);
     }
     this.handles = [];
+  }
+
+  /** Did the ship's travel this step pass through gate `index`'s ring?
+   *  Geometric swept test against the gate plane — tunnel-proof at any speed,
+   *  and (unlike a sphere sensor) only counts passing through the actual hole. */
+  passedGate(index: number, prevPos: { x: number; y: number; z: number }, currPos: { x: number; y: number; z: number }): boolean {
+    const h = this.handles[index];
+    if (!h) return false;
+    tmpPrev.set(prevPos.x, prevPos.y, prevPos.z);
+    tmpCurr.set(currPos.x, currPos.y, currPos.z);
+    const d0 = tmpCross.copy(tmpPrev).sub(h.position).dot(h.normal);
+    const d1 = tmpCross.copy(tmpCurr).sub(h.position).dot(h.normal);
+    if (d0 === d1) return false;     // travelled parallel to the gate plane
+    if (d0 * d1 > 0) return false;   // stayed on one side — no crossing
+    const t = d0 / (d0 - d1);        // fraction of the segment at the plane
+    tmpSeg.copy(tmpCurr).sub(tmpPrev).multiplyScalar(t);
+    tmpCross.copy(tmpPrev).add(tmpSeg);
+    return tmpCross.distanceTo(h.position) <= h.radius;
   }
 
   update(dt: number, nextCheckpoint: number): void {
@@ -98,7 +112,7 @@ export class CheckpointSystem {
     return handle.group.position;
   }
 
-  private addGate(gate: RaceGate, index: number): void {
+  private addGate(gate: RaceGate): void {
     const group = new THREE.Group();
     group.position.copy(gate.position);
     tmpQuat.setFromUnitVectors(defaultNormal, gate.normal);
@@ -119,17 +133,15 @@ export class CheckpointSystem {
 
     this.scene.add(group);
 
-    const bodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased()
-      .setTranslation(gate.position.x, gate.position.y, gate.position.z);
-    const body = this.physics.world.createRigidBody(bodyDesc);
-    const colliderDesc = RAPIER.ColliderDesc.ball(gate.radius)
-      .setSensor(true)
-      .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
-      .setCollisionGroups(interactionGroups(COL_CHECKPOINT, COL_SHIP));
-    const collider = this.physics.world.createCollider(colliderDesc, body);
-    this.registry.register(collider.handle, { type: 'checkpoint', index });
-
-    this.handles.push({ body, colliderHandle: collider.handle, group, ring, core, light });
+    this.handles.push({
+      position: gate.position.clone(),
+      normal: gate.normal.clone().normalize(),
+      radius: gate.radius,
+      group,
+      ring,
+      core,
+      light,
+    });
   }
 
   private updateActive(nextCheckpoint: number): void {

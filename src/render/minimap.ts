@@ -4,7 +4,7 @@ import type { Trajectory } from '../game/trajectory';
 
 const MAX_ASTEROIDS = 160;
 const MAX_POINTS = 220;
-const MAP_RANGE = 1450;
+const MAP_RANGE = 3200;
 const HOLO_RADIUS = 420;
 
 export interface MinimapGhostMarkers {
@@ -106,20 +106,20 @@ export class Minimap {
       ghosts?: MinimapGhostMarkers;
     },
   ): void {
-    for (let i = 0; i < this.asteroidMeshes.length; i++) {
-      const mesh = this.asteroidMeshes[i];
-      const asteroid = asteroids[i];
-      if (!asteroid) {
-        mesh.visible = false;
-        continue;
-      }
+    let visibleAsteroids = 0;
+    for (const asteroid of asteroids) {
+      if (visibleAsteroids >= this.asteroidMeshes.length) break;
       const projected = this.projectRelative(asteroid.position, shipPosition);
-      mesh.visible = projected.visible;
-      if (projected.visible) {
-        mesh.position.copy(projected.position);
-        const s = Math.max(3.5, Math.min(28, asteroid.radius * 0.18));
-        mesh.scale.setScalar(s);
-      }
+      if (!projected.visible) continue;
+      const mesh = this.asteroidMeshes[visibleAsteroids];
+      mesh.visible = true;
+      mesh.position.copy(projected.position);
+      const s = Math.max(3.5, Math.min(28, asteroid.radius * 0.18));
+      mesh.scale.setScalar(s);
+      visibleAsteroids++;
+    }
+    for (let i = visibleAsteroids; i < this.asteroidMeshes.length; i++) {
+      this.asteroidMeshes[i].visible = false;
     }
 
     this.ship.rotation.z = shipYaw;
@@ -195,7 +195,9 @@ export class Minimap {
       mesh.visible = false;
       return;
     }
-    const projected = this.projectRelative(world, shipPosition);
+    // Clamp distant markers to the globe edge so the next-gate bearing stays on
+    // screen instead of vanishing the moment the target is beyond map range.
+    const projected = this.projectRelative(world, shipPosition, true);
     mesh.visible = projected.visible;
     if (projected.visible) mesh.position.copy(projected.position);
   }

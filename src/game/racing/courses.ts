@@ -9,6 +9,9 @@ export type {
   CourseDesignBrief,
   CourseDifficulty,
   CourseFieldRecipe,
+  CourseGravityAnchor,
+  CourseTutorial,
+  CourseTutorialTipTriggers,
   MedalTimes,
   RaceCourse,
   RaceGate,
@@ -17,6 +20,10 @@ export type {
 
 export const RACE_ASTEROID_DEFAULTS: AsteroidTuningPatch = {
   PROCEDURAL_COUNT: 760,
+  VISUAL_COUNT: 0,
+  VISUAL_RADIUS_MIN: 10,
+  VISUAL_RADIUS_RANGE: 150,
+  VISUAL_RADIUS_POWER: 1.65,
   RADIUS_MIN: 10,
   RADIUS_RANGE: 260,
   RADIUS_POWER: 1.38,

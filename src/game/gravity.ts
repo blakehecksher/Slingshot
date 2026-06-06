@@ -12,6 +12,8 @@ export const GRAVITY_TUNING = {
   SOFTENING_FACTOR: 0.35,
   MIN_SOFTENING: 12,
   DANGER_RANGE: 220,
+  MAX_PASSIVE_EFFECT_DISTANCE: 5200,
+  LARGE_BODY_EFFECT_RADIUS_MULT: 24,
   // Dead Iron core ramp. When surface clearance drops below
   // radius * CORE_BOOST_RANGE_FRAC, the well ramps quadratically up to
   // (1 + CORE_BOOST_PEAK)x at the surface. Story §4: concentrated cores hit
@@ -30,6 +32,12 @@ export function sampleGravityAt(position: THREE.Vector3, asteroids: readonly Ast
   for (const asteroid of asteroids) {
     _delta.subVectors(asteroid.position, position);
     const distanceSq = Math.max(_delta.lengthSq(), 0.0001);
+    const maxEffectDistance = Math.max(
+      GRAVITY_TUNING.MAX_PASSIVE_EFFECT_DISTANCE,
+      asteroid.radius * GRAVITY_TUNING.LARGE_BODY_EFFECT_RADIUS_MULT,
+    );
+    if (distanceSq > maxEffectDistance * maxEffectDistance) continue;
+
     const distance = Math.sqrt(distanceSq);
     const softening = Math.max(GRAVITY_TUNING.MIN_SOFTENING, asteroid.radius * GRAVITY_TUNING.SOFTENING_FACTOR);
     const softenedSq = distanceSq + softening * softening;

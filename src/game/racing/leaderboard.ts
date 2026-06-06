@@ -207,6 +207,12 @@ export class LocalLeaderboardProvider implements LeaderboardProvider {
   }
 
   async submitRun(run: GhostRun): Promise<SubmitResult> {
+    // Guard against a NaN/Infinity time (e.g. a bad dt spike) being persisted —
+    // it would compare false against every future run and freeze the record.
+    if (!Number.isFinite(run.timeSec) || run.timeSec <= 0) {
+      const existing = this.getRecord(run.courseId);
+      return { save: this.data, record: existing ?? recordFromRun(sanitizeGhost(run), [], 'local', this.playerName), isPersonalBest: false };
+    }
     const sanitized = sanitizeGhost(run);
     const previous = this.getRecord(run.courseId);
     const isPersonalBest = !previous || sanitized.timeSec < previous.bestTimeSec;

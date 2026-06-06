@@ -105,9 +105,20 @@ export class GhostReplay {
       return;
     }
     const samples = this.run.samples;
-    if (timeSec < samples[0].t || timeSec > samples[samples.length - 1].t) {
+    if (timeSec < samples[0].t) {
       this.root.visible = false;
       this.glow.visible = false;
+      return;
+    }
+    // Past the ghost's finish: park it at the line so a trailing player can still
+    // see where their rival ended instead of it popping out of existence.
+    if (timeSec > samples[samples.length - 1].t) {
+      const last = samples[samples.length - 1];
+      this.root.position.set(last.p[0], last.p[1], last.p[2]);
+      this.root.quaternion.set(last.q[0], last.q[1], last.q[2], last.q[3]);
+      this.lastPosition.copy(this.root.position);
+      this.root.visible = true;
+      this.updateGlow(viewerPosition);
       return;
     }
 

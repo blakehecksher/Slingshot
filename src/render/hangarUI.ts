@@ -431,6 +431,9 @@ export class HangarUI {
       this.currentMesh.traverse?.((node) => {
         const m = node as THREE.Mesh;
         if (m.geometry) m.geometry.dispose?.();
+        const mat = m.material;
+        if (Array.isArray(mat)) mat.forEach((x) => x?.dispose?.());
+        else mat?.dispose?.();
       });
       this.currentMesh = null;
     }

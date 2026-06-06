@@ -70,6 +70,8 @@ export class GameAudio {
   private unlocked = false;
   private starting = false;
   private baseUrl: string;
+  // Menu navigation can repeat faster than the move click feels good.
+  private lastMenuMoveAt = -Infinity;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
@@ -353,7 +355,13 @@ export class GameAudio {
     o.stop(t + 0.62);
   }
 
-  menuMove(): void { this.playUi('move', 0.32) || this.blip(180, 230, 0.045, AUDIO_TUNING.SFX_MENU_VOLUME * 0.28, 'sine'); }
+  menuMove(): void {
+    if (!this.ctx || !this.sfxGain || !this.unlocked) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastMenuMoveAt < 0.18) return;
+    this.lastMenuMoveAt = now;
+    this.playUi('move', 0.32) || this.blip(180, 230, 0.045, AUDIO_TUNING.SFX_MENU_VOLUME * 0.28, 'sine');
+  }
   menuConfirm(): void { this.playUi('confirm', 0.38) || this.blip(210, 300, 0.075, AUDIO_TUNING.SFX_MENU_VOLUME * 0.38, 'sine'); }
   menuBack(): void { this.playUi('back', 0.34) || this.blip(200, 135, 0.09, AUDIO_TUNING.SFX_MENU_VOLUME * 0.34, 'sine'); }
   pauseTone(): void { this.playUi('back', 0.24) || this.blip(155, 120, 0.1, AUDIO_TUNING.SFX_MENU_VOLUME * 0.25, 'sine'); }

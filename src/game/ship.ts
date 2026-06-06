@@ -150,7 +150,10 @@ export class Ship {
     const desc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(0, 0, 0)
       .setLinearDamping(LINEAR_DAMPING)
-      .setAngularDamping(ANGULAR_DAMPING);
+      .setAngularDamping(ANGULAR_DAMPING)
+      // Continuous collision detection: at slingshot speeds the hull can travel
+      // many metres per step and tunnel clean through an asteroid otherwise.
+      .setCcdEnabled(true);
     this.body = physics.world.createRigidBody(desc);
 
     const density = SHIP_TUNING.MASS / HULL_VOLUME;
@@ -231,6 +234,7 @@ export class Ship {
     this.attachments = built.attachments;
     this._thrusters = built.thrusters;
     this._scene.remove(oldMesh);
+    disposeObject(oldMesh);
     this._scene.add(this.mesh);
     this.syncMeshFromBody();
   }
@@ -434,4 +438,16 @@ export class Ship {
     const v = this.body.linvel();
     return Math.hypot(v.x, v.y, v.z);
   }
+}
+
+/** Free GPU geometry + materials of a discarded mesh tree. Each ship build mints
+ *  fresh geometries and ~9 materials, so swapping visuals leaks without this. */
+function disposeObject(root: THREE.Object3D): void {
+  root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    mesh.geometry?.dispose?.();
+    const mat = mesh.material;
+    if (Array.isArray(mat)) mat.forEach((m) => m?.dispose?.());
+    else mat?.dispose?.();
+  });
 }
