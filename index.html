@@ -164,6 +164,12 @@
         font-weight: 800; font-size: 19px; line-height: 1;
         color: #fff8e8; white-space: nowrap;
       }
+      /* Orbitron has no tabular figures, so monospace digits manually:
+         each glyph gets a fixed-width box wide enough for the widest. */
+      #status .chrono-time .dg,
+      #status .gauge-val .dg { display: inline-block; width: 0.86em; text-align: center; }
+      #status .chrono-time .sep,
+      #status .gauge-val .sep { display: inline-block; width: 0.42em; text-align: center; }
       #status .gauge-val i {
         font-style: normal; font-size: 9px; color: #6e6250; margin-left: 3px;
         font-family: "IBM Plex Mono", ui-monospace, monospace;

@@ -431,7 +431,11 @@ export class Input {
   }
 }
 
-function isTextInputTarget(target: EventTarget | null): boolean {
+export function isTextInputTarget(target: EventTarget | null): boolean {
+  return isEditableElement(target) || isEditableElement(document.activeElement);
+}
+
+function isEditableElement(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName.toLowerCase();
   return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;

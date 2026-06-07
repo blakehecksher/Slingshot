@@ -4,7 +4,7 @@ import { ContactRegistry } from './game/collision';
 import { Energy } from './game/energy';
 import { FEEDBACK_TUNING, GravityFeedback } from './game/feedback';
 import { GRAVITY_TUNING, sampleGravityAt } from './game/gravity';
-import { Input, type ShipCommand } from './game/input';
+import { Input, isTextInputTarget, type ShipCommand } from './game/input';
 import { Lifecycle, LIFECYCLE_TUNING } from './game/lifecycle';
 import { PICKUP_TUNING, PickupSystem } from './game/pickups';
 import { Ship, SHIP_TUNING } from './game/ship';
@@ -234,6 +234,8 @@ let resultsActionIndex = 0;
 let invalidActionIndex = 0;
 let pauseActionIndex = 0;
 let settingsFocusIndex = 0;
+let settingsScrollTop = 0;
+let settingsShouldScrollFocus = false;
 let fieldNotesActionIndex = 0;
 let crashAutoRestartPending = false;
 let friendEntryFocusIndex = 0;
@@ -310,6 +312,7 @@ prepareCourse(selectedCourse);
 renderAppScene('Field timing board online.');
 
 window.addEventListener('keydown', (e) => {
+  if (isTextInputTarget(e.target)) return;
   if (e.code === 'KeyH' && !e.repeat) {
     setDebugPanelsVisible(!panelsVisible);
   }
@@ -549,8 +552,13 @@ function applyCameraToggle(): void {
 }
 
 function setAppScene(scene: AppScene, message = menuMessage): void {
+  const enteringSettings = scene === 'settings' && appScene !== 'settings';
   appScene = scene;
   menuMessage = message;
+  if (enteringSettings) {
+    settingsScrollTop = 0;
+    settingsShouldScrollFocus = true;
+  }
   if (scene === 'race') {
     coursePanel.style.display = 'none';
     return;
@@ -595,7 +603,7 @@ function handleAppInput(cmd: ShipCommand): void {
     return;
   }
 
-  if (cmd.restartRace) {
+  if (cmd.restartRace && (appScene === 'race' || appScene === 'pause')) {
     audio.menuConfirm();
     startRace();
     return;
@@ -985,18 +993,43 @@ const SETTINGS_ROWS = [
   'Return defaults',
 ] as const;
 const SETTINGS_RESET_INDEX = SETTINGS_ROWS.length - 1;
+const SETTINGS_GROUPS = [
+  { title: 'Flight', rows: [0, 1, 2, 3, 4, 5, 6] },
+  { title: 'Display', rows: [7, 8, 9, 10] },
+  { title: 'Audio', rows: [11, 12, 13] },
+  { title: 'Accessibility', rows: [14, 15] },
+  { title: 'System', rows: [16, SETTINGS_RESET_INDEX] },
+] as const;
 
 function handleSettingsInput(cmd: ShipCommand): void {
-  if (cmd.menuUp) settingsFocusIndex = wrapIndex(settingsFocusIndex - 1, SETTINGS_ROWS.length);
-  if (cmd.menuDown) settingsFocusIndex = wrapIndex(settingsFocusIndex + 1, SETTINGS_ROWS.length);
-  if (cmd.menuLeft || cmd.menuRight || cmd.menuConfirm) {
-    adjustSetting(settingsFocusIndex, cmd.menuLeft ? -1 : 1);
-  }
   if (cmd.menuBack || (cmd.menuPause && previousMenuScene === 'pause')) {
     setAppScene(previousMenuScene, previousMenuScene === 'pause' ? 'Run paused.' : 'Course board ready.');
     return;
   }
-  if (cmd.menuUp || cmd.menuDown || cmd.menuLeft || cmd.menuRight || cmd.menuConfirm) renderAppScene();
+
+  let needsRender = false;
+  if (cmd.menuUp || cmd.menuDown) {
+    const nextIndex = clampSettingIndex(settingsFocusIndex + (cmd.menuUp ? -1 : 1));
+    if (nextIndex !== settingsFocusIndex) {
+      settingsFocusIndex = nextIndex;
+      settingsShouldScrollFocus = true;
+      needsRender = true;
+    }
+  }
+
+  if (cmd.menuLeft || cmd.menuRight || (cmd.menuConfirm && !cmd.menuPause && settingAcceptsConfirm(settingsFocusIndex))) {
+    adjustSetting(settingsFocusIndex, cmd.menuLeft ? -1 : 1);
+    needsRender = true;
+  }
+  if (needsRender) renderAppScene();
+}
+
+function clampSettingIndex(index: number): number {
+  return Math.max(0, Math.min(SETTINGS_ROWS.length - 1, index));
+}
+
+function settingAcceptsConfirm(index: number): boolean {
+  return index === 5 || index === 6 || index === 14 || index === 15 || index === 16 || index === SETTINGS_RESET_INDEX;
 }
 
 function adjustSetting(index: number, dir: number): void {
@@ -1312,7 +1345,26 @@ function loop(nowMs: number): void {
   requestAnimationFrame(loop);
 }
 
+// Orbitron lacks tabular figures, so wrap each glyph in a fixed-width box
+// to stop the readouts from jittering as digits change.
+function monoDigits(text: string): string {
+  let out = '';
+  for (const ch of text) {
+    const cls = (ch >= '0' && ch <= '9') || ch === '-' ? 'dg' : 'sep';
+    out += `<span class="${cls}">${ch}</span>`;
+  }
+  return out;
+}
+
 function updateStatus(): void {
+  // The timing rig belongs only to the live race; menu scenes are now
+  // translucent over the field and would otherwise show it bleeding through.
+  if (appScene !== 'race') {
+    statusBar.style.display = 'none';
+    return;
+  }
+  statusBar.style.display = '';
+
   const personalRecord = leaderboard.getRecord(selectedCourse.id);
   const topRecord = leaderboard.getTopRecord(selectedCourse.id);
   const best = personalRecord ? formatRaceTime(personalRecord.bestTimeSec) : '--:--.---';
@@ -1366,7 +1418,7 @@ function updateStatus(): void {
     <div class="rig-side left">
       <div class="gauge">
         <span class="gauge-label">Velocity</span>
-        <div class="gauge-row"><span class="gauge-val">${ship.speed.toFixed(0)}<i>m/s</i></span><span class="sub">pk ${peakSpeed.toFixed(0)}</span></div>
+        <div class="gauge-row"><span class="gauge-val">${monoDigits(ship.speed.toFixed(0))}<i>m/s</i></span><span class="sub">pk ${peakSpeed.toFixed(0)}</span></div>
         <div class="meter amber"><div class="meter-fill" style="width:${speedPct.toFixed(0)}%"></div></div>
       </div>
       <div class="gauge${energy.fraction < 0.2 ? ' low' : ''}">
@@ -1376,7 +1428,7 @@ function updateStatus(): void {
     </div>
     <div class="rig-chrono">
       <div class="chrono-gates">${pips}</div>
-      <span class="chrono-time">${formatRaceTime(race.elapsedSec)}</span>
+      <span class="chrono-time">${monoDigits(formatRaceTime(race.elapsedSec))}</span>
       <div class="chrono-foot">
         <span class="state ${stateClass}">${stateText}</span>
         <span class="split ${splitClass}">${splitDelta || 'split --'}</span>
@@ -1386,7 +1438,7 @@ function updateStatus(): void {
     <div class="rig-side right">
       <div class="gauge well lvl${wellLvl}">
         <span class="gauge-label">Well Pull</span>
-        <div class="gauge-row"><span class="gauge-val">${pull.toFixed(1)}<i>m/s²</i></span></div>
+        <div class="gauge-row"><span class="gauge-val">${monoDigits(pull.toFixed(1))}<i>m/s²</i></span></div>
         <span class="sub">${wellSub}</span>
       </div>
       <div class="gauge${ship.hpFraction < 0.3 ? ' low' : ''}">
@@ -1459,6 +1511,7 @@ function renderAppScene(message = menuMessage, recordOverride?: CourseRecord): v
     coursePanel.style.display = 'none';
     return;
   }
+  if (appScene === 'settings') rememberSettingsScrollPosition();
 
   const html =
     appScene === 'title' ? renderTitleScene(message) :
@@ -1475,7 +1528,7 @@ function renderAppScene(message = menuMessage, recordOverride?: CourseRecord): v
   coursePanel.innerHTML = html;
   coursePanel.style.display = '';
   wireSceneEvents();
-  if (appScene === 'settings') scrollSettingsFocusIntoView();
+  if (appScene === 'settings') syncSettingsScrollAfterRender();
   if (appScene === 'title' || appScene === 'course' || appScene === 'field-notes') scrollSelectedCourseIntoView();
 }
 
@@ -1906,16 +1959,16 @@ function renderSettingsScene(message: string): string {
       <header class="settings-card-head">
         <div>
           <div class="league-title">Settings</div>
-          <h1>Controls</h1>
-          <p>${escapeHtml(message)} ${pad ? `Controller linked: ${pad.id}` : 'Controller standby: press a gamepad button to link.'}</p>
+          <h1>Settings</h1>
+          <p>${escapeHtml(message)} ${pad ? `Controller: ${pad.id}` : 'Controller standby: press a gamepad button to link.'}</p>
         </div>
         <button class="settings-close" id="settings-back">Back</button>
       </header>
       <section class="terminal-panel settings-panel">
-        <div class="section-title"><h2>Controller Feel</h2><span>A toggles, left/right adjusts</span></div>
-        <div class="settings-grid">${SETTINGS_ROWS.map((label, index) => settingRow(label, index)).join('')}</div>
+        <div class="section-title"><h2>Game Options</h2><span>Up/down select, left/right adjust</span></div>
+        <div class="settings-grid">${renderSettingsRows()}</div>
       </section>
-      <div class="menu-hints"><span>D-pad / stick: move</span><span>A: adjust</span><span>B: back</span><span>Start: pause</span></div>
+      <div class="menu-hints"><span>D-pad / stick: select</span><span>Left / Right: adjust</span><span>A: toggle / select</span><span>B: back</span></div>
     </div>
   `;
 }
@@ -2144,17 +2197,40 @@ function renderRecentRuns(record: CourseRecord | null): string {
 void renderRecentRuns;
 
 function settingRow(label: string, index: number): string {
-  return `<button class="setting-row${settingsFocusIndex === index ? ' selected' : ''}" data-setting="${index}">
+  return `<button class="setting-row${settingsFocusIndex === index ? ' selected' : ''}" data-setting="${index}" aria-current="${settingsFocusIndex === index ? 'true' : 'false'}">
     <span>${escapeHtml(label)}</span>
     <b>${escapeHtml(settingValue(index))}</b>
   </button>`;
 }
 
-function scrollSettingsFocusIntoView(): void {
+function renderSettingsRows(): string {
+  return SETTINGS_GROUPS.map((group) => `
+    <div class="settings-group">
+      <div class="settings-group-title">${escapeHtml(group.title)}</div>
+      ${group.rows.map((index) => settingRow(SETTINGS_ROWS[index], index)).join('')}
+    </div>
+  `).join('');
+}
+
+function rememberSettingsScrollPosition(): void {
+  const grid = coursePanel.querySelector<HTMLDivElement>('.settings-grid');
+  if (grid) settingsScrollTop = grid.scrollTop;
+}
+
+function syncSettingsScrollAfterRender(): void {
+  const grid = coursePanel.querySelector<HTMLDivElement>('.settings-grid');
+  if (!grid) return;
+  grid.scrollTop = settingsScrollTop;
+  grid.addEventListener('scroll', () => {
+    settingsScrollTop = grid.scrollTop;
+  }, { passive: true });
+  if (!settingsShouldScrollFocus) return;
+  settingsShouldScrollFocus = false;
   requestAnimationFrame(() => {
     coursePanel
       .querySelector<HTMLButtonElement>('.setting-row.selected')
       ?.scrollIntoView({ block: 'nearest' });
+    settingsScrollTop = grid.scrollTop;
   });
 }
 
@@ -2291,15 +2367,27 @@ function renderLeaderboardEntries(entries: readonly RaceLeaderboardEntry[]): str
 }
 
 function renderStartLeaderboardEntries(entries: readonly RaceLeaderboardEntry[], record: CourseRecord | null): string {
-  if (entries.length === 0) return '<div class="start-empty-board">No runs for this course yet.</div>';
-  return `<ol class="title-leaderboard">${entries.slice(0, 10).map((entry) => {
+  // Always show a fixed board height so empty courses read as a claim
+  // board with open timing slots rather than a blank panel.
+  const TARGET_SLOTS = 8;
+  const shown = entries.slice(0, 10);
+  const rows = shown.map((entry) => {
     const isMe = isPersonalEntry(entry, record);
     return `<li class="${isMe ? 'me ' : ''}rank-${Math.min(entry.rank, 4)}">
       <span>${entry.rank}</span>
       <b>${escapeHtml(entry.playerName ?? 'Anonymous Pilot')}${isMe ? ' <' : ''}</b>
       <em>${formatRaceTime(entry.timeSec)}</em>
     </li>`;
-  }).join('')}</ol>`;
+  }).join('');
+  let fillers = '';
+  for (let i = shown.length; i < TARGET_SLOTS; i++) {
+    fillers += `<li class="open-slot">
+      <span>${i + 1}</span>
+      <b>open slot</b>
+      <em>--:--.---</em>
+    </li>`;
+  }
+  return `<ol class="title-leaderboard">${rows}${fillers}</ol>`;
 }
 
 void renderLeaderboardEntries;
@@ -2840,7 +2928,7 @@ function injectRaceStyles(): void {
     }
     #course-select .settings-panel {
       min-height: 0;
-      padding: 14px;
+      padding: 16px;
       overflow: hidden;
       display: flex;
       flex-direction: column;
@@ -2851,13 +2939,32 @@ function injectRaceStyles(): void {
     #course-select .settings-grid {
       display: grid;
       grid-template-columns: 1fr;
-      gap: 7px;
+      gap: 12px;
       min-height: 0;
       max-height: none;
       overflow-y: auto;
       padding-right: 6px;
+      overscroll-behavior: contain;
+      scroll-padding: 10px 0;
       scrollbar-width: thin;
       scrollbar-color: rgba(212, 146, 31, 0.55) rgba(12, 10, 7, 0.75);
+    }
+    #course-select .settings-group {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 7px;
+    }
+    #course-select .settings-group + .settings-group {
+      padding-top: 10px;
+      border-top: 1px solid rgba(121, 225, 214, 0.12);
+    }
+    #course-select .settings-group-title {
+      color: #d4921f;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 0 2px 2px;
     }
     #course-select .menu-hints {
       display: flex;
@@ -2912,7 +3019,7 @@ function injectRaceStyles(): void {
       font-family: "IBM Plex Mono", ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
     }
     #course-select .settings-card {
-      width: min(620px, calc(100vw - 36px));
+      width: min(760px, calc(100vw - 36px));
       max-height: calc(100vh - 36px);
       min-height: 0;
       display: grid;
@@ -2941,7 +3048,7 @@ function injectRaceStyles(): void {
     #course-select .settings-card-head h1 {
       margin: 4px 0 4px;
       color: #ede3cc;
-      font-size: clamp(28px, 4vw, 44px);
+      font-size: clamp(30px, 4vw, 46px);
       line-height: 0.96;
       font-weight: 900;
     }
@@ -3922,7 +4029,7 @@ function injectRaceStyles(): void {
     #course-select .menu-button,
     #course-select .setting-row {
       min-height: 42px;
-      padding: 10px 14px;
+      padding: 11px 14px;
       border: 1px solid var(--c-border);
       border-left: 3px solid transparent;
       background: var(--c-bg-2);
@@ -3948,15 +4055,23 @@ function injectRaceStyles(): void {
       color: var(--c-text-muted);
       font-size: var(--fs-mini);
       letter-spacing: var(--ls-button);
+      min-width: 0;
     }
     #course-select .setting-row.selected span {
       color: var(--c-text);
     }
     #course-select .setting-row b {
+      min-width: 74px;
+      padding: 4px 8px;
+      border: 1px solid var(--c-border);
+      background: rgba(3, 6, 10, 0.32);
       color: var(--c-text-strong);
       font-weight: var(--fw-bold);
+      text-align: right;
     }
     #course-select .setting-row.selected b {
+      border-color: rgba(212, 146, 31, 0.52);
+      background: rgba(212, 146, 31, 0.10);
       color: var(--c-accent);
     }
     /* Primary action: filled amber, matches start screen Start Race */
@@ -4420,6 +4535,103 @@ function injectRaceStyles(): void {
     #race-countdown.visible {
       opacity: 1;
       transform: scale(1);
+    }
+
+    /* ===================================================================
+     * Field Terminal pass
+     * The title/course board is a depot terminal floating in the live
+     * asteroid field: atmosphere shows through behind it, and the board
+     * itself is a worn instrument plate (bolts, amber bezel, scanlines)
+     * matching the in-race timing rig.
+     * =================================================================== */
+    #course-select.scene-title,
+    #course-select.scene-course {
+      background:
+        radial-gradient(ellipse at 50% 118%, rgba(212, 146, 31, 0.05), transparent 55%),
+        linear-gradient(180deg, rgba(7, 6, 10, 0.52), rgba(7, 6, 10, 0.16) 30%, rgba(7, 6, 10, 0.52));
+    }
+    #course-select.scene-title .start-screen,
+    #course-select.scene-course .start-screen {
+      background:
+        radial-gradient(ellipse at 50% -8%, rgba(42, 140, 128, 0.10), transparent 40%),
+        radial-gradient(ellipse at 50% 112%, rgba(7, 6, 10, 0.86), transparent 58%),
+        linear-gradient(180deg, rgba(7, 6, 10, 0.26), rgba(7, 6, 10, 0.5));
+    }
+    /* faint vignette + scanlines as a full-bleed atmosphere layer */
+    #course-select.scene-title .start-screen::before,
+    #course-select.scene-course .start-screen::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(ellipse at center, transparent 58%, rgba(0, 0, 0, 0.5)),
+        repeating-linear-gradient(0deg, rgba(212, 146, 31, 0.018), rgba(212, 146, 31, 0.018) 1px, transparent 1px, transparent 5px);
+      z-index: 0;
+    }
+    #course-select .start-header,
+    #course-select .start-board,
+    #course-select .start-hints { position: relative; z-index: 1; }
+    #course-select .slingshot-logo { filter: drop-shadow(0 3px 14px rgba(0, 0, 0, 0.65)); }
+
+    /* depot board plate: bolted iron, amber top bezel, scanlines */
+    #course-select .start-board {
+      position: relative;
+      border: 1px solid var(--c-border-strong);
+      border-top: 2px solid var(--c-accent-deep);
+      background:
+        radial-gradient(circle at 9px 9px, rgba(120, 108, 86, 0.42) 0 1.5px, transparent 1.9px),
+        radial-gradient(circle at calc(100% - 9px) 9px, rgba(120, 108, 86, 0.42) 0 1.5px, transparent 1.9px),
+        radial-gradient(circle at 9px calc(100% - 9px), rgba(120, 108, 86, 0.42) 0 1.5px, transparent 1.9px),
+        radial-gradient(circle at calc(100% - 9px) calc(100% - 9px), rgba(120, 108, 86, 0.42) 0 1.5px, transparent 1.9px),
+        repeating-linear-gradient(0deg, rgba(212, 146, 31, 0.02), rgba(212, 146, 31, 0.02) 1px, transparent 1px, transparent 5px),
+        linear-gradient(180deg, rgba(20, 15, 9, 0.90), rgba(10, 8, 6, 0.92));
+      box-shadow: 0 20px 56px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(240, 179, 61, 0.10);
+      backdrop-filter: blur(3px);
+    }
+
+    /* section heads as amber-bezel instrument labels */
+    #course-select .start-section-head {
+      background: linear-gradient(180deg, rgba(40, 28, 10, 0.55), rgba(16, 11, 5, 0.3));
+      border-bottom: 1px solid var(--c-border);
+      box-shadow: inset 0 1px 0 rgba(240, 179, 61, 0.10);
+    }
+    #course-select .start-section-head span {
+      color: var(--c-accent);
+      letter-spacing: var(--ls-label);
+    }
+
+    /* rows + tables read as glass over the iron plate */
+    #course-select .start-course-row { background: rgba(20, 15, 9, 0.5); }
+    #course-select .start-course-row:nth-child(even) { background: rgba(12, 9, 6, 0.5); }
+    #course-select .start-course-row:hover,
+    #course-select .start-course-row:focus-visible { background: rgba(30, 22, 11, 0.6); }
+    #course-select .start-course-row.selected { background: rgba(42, 29, 11, 0.62); }
+    #course-select .title-board-head { background: rgba(16, 12, 7, 0.6); }
+    #course-select .title-leaderboard li { background: rgba(20, 15, 9, 0.42); }
+    #course-select .title-leaderboard li:nth-child(even) { background: rgba(12, 9, 6, 0.42); }
+    #course-select .title-leaderboard li.me { background: rgba(42, 29, 11, 0.58); }
+    #course-select .title-leaderboard li.open-slot { background: rgba(10, 8, 6, 0.32); }
+    #course-select .title-leaderboard li.open-slot span { color: var(--c-text-faint); }
+    #course-select .title-leaderboard li.open-slot b {
+      color: var(--c-text-faint);
+      font-style: italic;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-size: var(--fs-mini);
+    }
+    #course-select .title-leaderboard li.open-slot em { color: var(--c-text-faint); font-weight: var(--fw-text); }
+    #course-select .personal-best-bar {
+      background: rgba(13, 10, 6, 0.62);
+      border-top: 1px solid rgba(212, 146, 31, 0.18);
+    }
+
+    /* footer hint chips as worn terminal keys */
+    #course-select .start-hints .footer-settings,
+    #course-select .start-hints span {
+      border: 1px solid var(--c-border-strong);
+      background: linear-gradient(180deg, rgba(22, 16, 10, 0.8), rgba(10, 8, 6, 0.84));
+      backdrop-filter: blur(2px);
     }
   `;
   document.head.appendChild(style);

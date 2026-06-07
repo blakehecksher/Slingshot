@@ -12,7 +12,9 @@ as $$
     -- Active courses from src/game/racing/courseCatalog.ts.
     'wake-primer',
     'needle-wake',
-    'blackglass-thread'
+    'blackglass-thread',
+    'iron-switchback',
+    'core-spiral'
   );
 $$;
 

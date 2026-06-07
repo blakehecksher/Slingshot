@@ -8,6 +8,7 @@ import { ENEMY_TUNING } from '../game/enemies';
 import { ENERGY_TUNING } from '../game/energy';
 import { FEEDBACK_TUNING } from '../game/feedback';
 import { GRAVITY_TUNING } from '../game/gravity';
+import { isTextInputTarget } from '../game/input';
 import { LIFECYCLE_TUNING } from '../game/lifecycle';
 import { PICKUP_TUNING, PickupSystem } from '../game/pickups';
 import { SHIP_TUNING, SHIP_VARIANTS, SHIP_VISUALS, type Ship, type ShipVariantId } from '../game/ship';
@@ -246,6 +247,7 @@ export class TuningPanel {
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_DEPOSIT_VOLUME', 0, 1, 0.01);
 
     window.addEventListener('keydown', (e) => {
+      if (isTextInputTarget(e.target)) return;
       if (e.code === 'KeyP' && !e.repeat) this.toggle();
     });
   }
