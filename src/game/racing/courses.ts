@@ -4,17 +4,20 @@ import { AUTHORED_RACE_COURSES } from './courseCatalog';
 
 export type {
   AuthoredRaceCourse,
+  AuthoredGateAnchor,
   AuthoredRaceGate,
   CourseBiome,
   CourseDesignBrief,
   CourseDifficulty,
   CourseFieldRecipe,
   CourseGravityAnchor,
+  CourseLore,
   CourseTutorial,
   CourseTutorialTipTriggers,
   MedalTimes,
   RaceCourse,
   RaceGate,
+  RaceGateKind,
   Vec3Tuple,
 } from './courseAuthoring';
 

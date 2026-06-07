@@ -197,3 +197,9 @@ Supersedes: none
 Decision: Dense-course asteroid counts should separate real gameplay asteroids from visual-only asteroid density. Gameplay asteroids create meshes, Rapier colliders, gravity mass, trajectory influence, and minimap entries. Visual-only asteroids render through an instanced mesh and do not affect physics, gravity, trajectory prediction, or minimap sampling.
 Reason: Claim Traverse proved that thousands of real asteroids are too expensive for a large point-to-point course. The game needs the visual feeling of dense claim space without forcing every background rock into the simulation.
 Supersedes: none
+
+## 2026-06-07 0004 - Remove in-race minimap
+
+Decision: Remove the persistent in-race minimap from the active racing build and product spec. Keep trajectory prediction available for debug/tuning and any lower-cost in-world guidance, but do not treat a separate minimap render as core HUD.
+Reason: The minimap adds an extra render pass and HUD complexity while providing limited function in the current gate-racing loop. Gates, ghosts, the course guide line, field feedback, and optional debug trajectory cues carry the useful navigation/readability work with less runtime and visual cost.
+Supersedes: minimap-as-core guidance in active spec and earlier minimap-specific implementation notes.

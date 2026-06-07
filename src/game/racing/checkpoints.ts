@@ -2,12 +2,13 @@ import * as THREE from 'three';
 import type { RaceCourse, RaceGate } from './courses';
 
 interface GateHandle {
+  readonly kind: RaceGate['kind'];
   readonly position: THREE.Vector3;
   readonly normal: THREE.Vector3;
   readonly radius: number;
+  readonly asteroidRadius: number;
   readonly group: THREE.Group;
-  readonly ring: THREE.Mesh;
-  readonly core: THREE.Mesh;
+  readonly visuals: THREE.Mesh[];
   readonly light: THREE.PointLight;
 }
 
@@ -53,6 +54,7 @@ const tmpPrev = new THREE.Vector3();
 const tmpCurr = new THREE.Vector3();
 const tmpCross = new THREE.Vector3();
 const tmpSeg = new THREE.Vector3();
+const tmpClosest = new THREE.Vector3();
 
 export class CheckpointSystem {
   private scene: THREE.Scene;
@@ -84,6 +86,21 @@ export class CheckpointSystem {
     if (!h) return false;
     tmpPrev.set(prevPos.x, prevPos.y, prevPos.z);
     tmpCurr.set(currPos.x, currPos.y, currPos.z);
+
+    if (h.kind === 'asteroid') {
+      const prevDist = tmpPrev.distanceTo(h.position);
+      const currDist = tmpCurr.distanceTo(h.position);
+      if (prevDist <= h.radius) return false;
+      if (currDist <= h.radius) return true;
+
+      tmpSeg.copy(tmpCurr).sub(tmpPrev);
+      const lenSq = tmpSeg.lengthSq();
+      if (lenSq <= 0.0001) return false;
+      const t = THREE.MathUtils.clamp(tmpClosest.copy(h.position).sub(tmpPrev).dot(tmpSeg) / lenSq, 0, 1);
+      tmpClosest.copy(tmpPrev).addScaledVector(tmpSeg, t);
+      return tmpClosest.distanceTo(h.position) <= h.radius;
+    }
+
     const d0 = tmpCross.copy(tmpPrev).sub(h.position).dot(h.normal);
     const d1 = tmpCross.copy(tmpCurr).sub(h.position).dot(h.normal);
     if (d0 === d1) return false;     // travelled parallel to the gate plane
@@ -99,8 +116,10 @@ export class CheckpointSystem {
     this.updateActive(nextCheckpoint);
     for (let i = 0; i < this.handles.length; i++) {
       const h = this.handles[i];
-      h.ring.rotation.z += dt * (i === nextCheckpoint ? 0.85 : 0.22);
-      h.core.rotation.z -= dt * 0.45;
+      for (const visual of h.visuals) {
+        visual.rotation.z += dt * (i === nextCheckpoint ? 0.85 : 0.22);
+        if (h.kind === 'asteroid') visual.rotation.y += dt * 0.12;
+      }
       const pulse = 0.7 + Math.sin(this.spin * 4 + i) * 0.18;
       h.light.intensity = i === nextCheckpoint ? 26 * pulse : i === nextCheckpoint + 1 ? 9 * pulse : 2;
     }
@@ -115,18 +134,40 @@ export class CheckpointSystem {
   private addGate(gate: RaceGate): void {
     const group = new THREE.Group();
     group.position.copy(gate.position);
-    tmpQuat.setFromUnitVectors(defaultNormal, gate.normal);
-    group.quaternion.copy(tmpQuat);
+    if (gate.kind === 'ring') {
+      tmpQuat.setFromUnitVectors(defaultNormal, gate.normal);
+      group.quaternion.copy(tmpQuat);
+    }
 
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(gate.radius, 2.2, 8, 72), WAITING_MAT);
-    group.add(ring);
+    const visuals: THREE.Mesh[] = [];
+    if (gate.kind === 'asteroid') {
+      const ringRadius = Math.max((gate.asteroidRadius ?? 0) + 8, gate.radius);
+      const ringA = new THREE.Mesh(new THREE.TorusGeometry(ringRadius, 2.4, 8, 96), WAITING_MAT);
+      group.add(ringA);
+      visuals.push(ringA);
 
-    const core = new THREE.Mesh(
-      new THREE.TorusGeometry(gate.radius * 0.68, 0.75, 6, 48),
-      WAITING_MAT,
-    );
-    core.rotation.z = Math.PI / 6;
-    group.add(core);
+      const ringB = new THREE.Mesh(new THREE.TorusGeometry(ringRadius * 0.985, 1.7, 8, 96), WAITING_MAT);
+      ringB.rotation.x = Math.PI / 2;
+      group.add(ringB);
+      visuals.push(ringB);
+
+      const ringC = new THREE.Mesh(new THREE.TorusGeometry(ringRadius * 0.97, 1.3, 8, 96), WAITING_MAT);
+      ringC.rotation.y = Math.PI / 2;
+      group.add(ringC);
+      visuals.push(ringC);
+    } else {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(gate.radius, 2.2, 8, 72), WAITING_MAT);
+      group.add(ring);
+      visuals.push(ring);
+
+      const core = new THREE.Mesh(
+        new THREE.TorusGeometry(gate.radius * 0.68, 0.75, 6, 48),
+        WAITING_MAT,
+      );
+      core.rotation.z = Math.PI / 6;
+      group.add(core);
+      visuals.push(core);
+    }
 
     const light = new THREE.PointLight(0x5dff9a, 12, gate.radius * 3.2, 1.8);
     group.add(light);
@@ -134,12 +175,13 @@ export class CheckpointSystem {
     this.scene.add(group);
 
     this.handles.push({
+      kind: gate.kind,
       position: gate.position.clone(),
       normal: gate.normal.clone().normalize(),
       radius: gate.radius,
+      asteroidRadius: gate.asteroidRadius ?? 0,
       group,
-      ring,
-      core,
+      visuals,
       light,
     });
   }
@@ -154,8 +196,9 @@ export class CheckpointSystem {
           : i === nextCheckpoint + 1
             ? NEXT_MAT
             : WAITING_MAT;
-      handle.ring.material = mat;
-      handle.core.material = mat;
+      for (const visual of handle.visuals) {
+        visual.material = mat;
+      }
       handle.light.color.set(
         i < nextCheckpoint
           ? 0xc8c3b7

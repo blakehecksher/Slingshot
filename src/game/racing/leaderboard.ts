@@ -85,7 +85,7 @@ interface SupabaseRaceGhostRow extends SupabaseRaceRow {
 }
 
 function emptySave(): RacingSaveData {
-  return { version: SAVE_VERSION, selectedCourseId: 'claim-shakedown', records: {} };
+  return { version: SAVE_VERSION, selectedCourseId: 'wake-primer', records: {} };
 }
 
 function sanitizeGhost(run: GhostRun): GhostRun {
@@ -178,7 +178,7 @@ export class LocalLeaderboardProvider implements LeaderboardProvider {
       }
       this.data = {
         version: SAVE_VERSION,
-        selectedCourseId: typeof parsed.selectedCourseId === 'string' ? parsed.selectedCourseId : 'claim-shakedown',
+        selectedCourseId: typeof parsed.selectedCourseId === 'string' ? parsed.selectedCourseId : 'wake-primer',
         records: parsed.records,
       };
     } catch (err) {

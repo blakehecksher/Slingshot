@@ -41,7 +41,7 @@ export const AUDIO_TUNING = {
   SFX_MENU_VOLUME: 0.12,
   SFX_BOOST_VOLUME: 0.12,
   SFX_DUST_VOLUME: 0.09,
-  THRUST_VOLUME: 0.08,
+  THRUST_VOLUME: 0,
   BOOST_LOOP_VOLUME: 0.06,
   MUSIC_VOLUME: 0.35,
 };
@@ -61,7 +61,6 @@ export class GameAudio {
   private rumble?: Loop;
   private creak?: Loop;
   private cargoHum?: { gain: GainNode; osc: OscillatorNode; sub: OscillatorNode; subGain: GainNode; current: number } | undefined;
-  private thrustHum: { gain: GainNode; osc: OscillatorNode; sub: OscillatorNode; current: number } | undefined;
   private boostHum: { gain: GainNode; osc: OscillatorNode; current: number } | undefined;
   private musicDrone: { gain: GainNode; osc: OscillatorNode; current: number; target: number } | undefined;
   private musicLoops: Partial<Record<'menu' | 'race' | 'results', Loop>> = {};
@@ -72,6 +71,7 @@ export class GameAudio {
   private baseUrl: string;
   // Menu navigation can repeat faster than the move click feels good.
   private lastMenuMoveAt = -Infinity;
+  private lastWellWarningAt = -Infinity;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
@@ -112,7 +112,6 @@ export class GameAudio {
     }
 
     this.cargoHum = this.makeCargoHum();
-    this.thrustHum = this.makeThrustHum();
     this.boostHum = this.makeBoostHum();
     this.musicDrone = undefined;
     void this.loadMusicLoops();
@@ -154,8 +153,6 @@ export class GameAudio {
         try {
           this.cargoHum.osc.start(0);
           this.cargoHum.sub.start(0);
-          this.thrustHum?.osc.start(0);
-          this.thrustHum?.sub.start(0);
           this.boostHum?.osc.start(0);
           this.musicDrone?.osc.start(0);
           Object.values(this.musicLoops).forEach((loop) => {
@@ -221,13 +218,6 @@ export class GameAudio {
   updateFlight(thrustDemand: number, boost: number, dt: number): void {
     if (!this.ctx || !this.unlocked) return;
     const k = 1 - Math.exp(-dt / 0.12);
-    if (this.thrustHum) {
-      const target = AUDIO_TUNING.THRUST_VOLUME * Math.max(0, Math.min(1, thrustDemand));
-      this.thrustHum.current += (target - this.thrustHum.current) * k;
-      this.thrustHum.gain.gain.value = this.thrustHum.current;
-      this.thrustHum.osc.frequency.setTargetAtTime(72 + thrustDemand * 46, this.ctx.currentTime, 0.04);
-      this.thrustHum.sub.frequency.setTargetAtTime(36 + thrustDemand * 20, this.ctx.currentTime, 0.04);
-    }
     if (this.boostHum) {
       const target = AUDIO_TUNING.BOOST_LOOP_VOLUME * Math.max(0, Math.min(1, boost * thrustDemand));
       this.boostHum.current += (target - this.boostHum.current) * k;
@@ -248,10 +238,6 @@ export class GameAudio {
     if (this.cargoHum) {
       this.cargoHum.current = 0;
       this.cargoHum.gain.gain.value = 0;
-    }
-    if (this.thrustHum) {
-      this.thrustHum.current = 0;
-      this.thrustHum.gain.gain.value = 0;
     }
     if (this.boostHum) {
       this.boostHum.current = 0;
@@ -367,9 +353,35 @@ export class GameAudio {
   pauseTone(): void { this.playUi('back', 0.24) || this.blip(155, 120, 0.1, AUDIO_TUNING.SFX_MENU_VOLUME * 0.25, 'sine'); }
   resumeTone(): void { this.playUi('move', 0.25) || this.blip(130, 190, 0.09, AUDIO_TUNING.SFX_MENU_VOLUME * 0.25, 'sine'); }
   raceStart(): void { this.blip(120, 260, 0.18, AUDIO_TUNING.SFX_BOOST_VOLUME * 0.45, 'sine'); }
+  countdownTick(): void { this.blip(170, 135, 0.08, AUDIO_TUNING.SFX_MENU_VOLUME * 0.22, 'square'); }
+  goSignal(): void { this.blip(120, 340, 0.22, AUDIO_TUNING.SFX_BOOST_VOLUME * 0.62, 'sawtooth'); }
+  gatePass(goodSplit = true): void {
+    if (goodSplit) {
+      this.playUi('confirm', 0.28) || this.blip(260, 430, 0.1, AUDIO_TUNING.SFX_MENU_VOLUME * 0.28, 'sine');
+    } else {
+      this.blip(220, 175, 0.1, AUDIO_TUNING.SFX_MENU_VOLUME * 0.22, 'sine');
+    }
+  }
   finishTone(): void { this.playUi('confirm', 0.45) || this.blip(220, 360, 0.18, AUDIO_TUNING.SFX_MENU_VOLUME * 0.45, 'sine'); }
+  personalBestTone(): void {
+    this.finishTone();
+    this.blip(300, 520, 0.2, AUDIO_TUNING.SFX_MENU_VOLUME * 0.34, 'sine');
+  }
   invalidTone(): void { this.playUi('error', 0.3) || this.blip(130, 85, 0.16, AUDIO_TUNING.SFX_HIT_VOLUME * 0.35, 'sine'); }
   boostKick(): void { this.blip(80, 140, 0.13, AUDIO_TUNING.SFX_BOOST_VOLUME * 0.35, 'sine'); }
+  wreckTone(): void {
+    this.invalidTone();
+    this.dustImpact(1.2);
+  }
+
+  closeWellWarning(intensity: number): void {
+    if (!this.ctx || !this.sfxGain || !this.unlocked) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastWellWarningAt < 1.25) return;
+    this.lastWellWarningAt = now;
+    const level = Math.max(0.25, Math.min(1, intensity));
+    this.blip(92 + level * 36, 72, 0.18, AUDIO_TUNING.SFX_HIT_VOLUME * 0.22 * level, 'square');
+  }
 
   dustImpact(intensity = 1): void {
     if (!this.ctx || !this.sfxGain || !this.unlocked) return;
@@ -514,24 +526,6 @@ export class GameAudio {
     src.start(t);
     src.stop(t + Math.min(buffer.duration, 0.7));
     return true;
-  }
-
-  private makeThrustHum() {
-    if (!this.ctx || !this.sfxGain) return undefined;
-    const gain = this.ctx.createGain();
-    gain.gain.value = 0;
-    gain.connect(this.sfxGain);
-    const osc = this.ctx.createOscillator();
-    osc.type = 'sawtooth';
-    const oscGain = this.ctx.createGain();
-    oscGain.gain.value = 0.16;
-    osc.connect(oscGain).connect(gain);
-    const sub = this.ctx.createOscillator();
-    sub.type = 'sine';
-    const subGain = this.ctx.createGain();
-    subGain.gain.value = 0.46;
-    sub.connect(subGain).connect(gain);
-    return { gain, osc, sub, current: 0 };
   }
 
   private makeBoostHum() {

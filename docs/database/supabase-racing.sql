@@ -3,6 +3,19 @@
 
 create extension if not exists pgcrypto;
 
+create or replace function public.is_slingshot_race_course(course_id text)
+returns boolean
+language sql
+stable
+as $$
+  select course_id in (
+    -- Active courses from src/game/racing/courseCatalog.ts.
+    'wake-primer',
+    'needle-wake',
+    'blackglass-thread'
+  );
+$$;
+
 -- ---------------------------------------------------------------------------
 -- Global course leaderboard + top-board ghost replay
 -- ---------------------------------------------------------------------------
@@ -38,7 +51,7 @@ create policy "race leaderboard public insert"
   for insert
   to anon, authenticated
   with check (
-    course_id in ('claim-shakedown', 'dead-iron-sweep', 'black-core-run')
+    public.is_slingshot_race_course(course_id)
     and char_length(player_name) between 1 and 40
     and time_sec > 0
     and time_sec < 3600
@@ -111,7 +124,7 @@ create policy "friend heat lobbies insert"
   on public.friend_heat_lobbies for insert to anon, authenticated
   with check (
     char_length(invite_code) between 4 and 16
-    and course_id in ('claim-shakedown', 'dead-iron-sweep', 'black-core-run')
+    and public.is_slingshot_race_course(course_id)
     and char_length(host_name) between 1 and 40
     and heat_duration_sec between 60 and 3600
     and status in ('lobby', 'active', 'closed')
@@ -152,7 +165,7 @@ drop policy if exists "friend heat runs insert" on public.friend_heat_runs;
 create policy "friend heat runs insert"
   on public.friend_heat_runs for insert to anon, authenticated
   with check (
-    course_id in ('claim-shakedown', 'dead-iron-sweep', 'black-core-run')
+    public.is_slingshot_race_course(course_id)
     and char_length(player_name) between 1 and 40
     and time_sec > 0
     and time_sec < 3600
@@ -165,3 +178,6 @@ create policy "friend heat runs insert"
 grant select, insert, update, delete on table public.friend_heat_lobbies to anon, authenticated;
 grant select, insert, update, delete on table public.friend_heat_participants to anon, authenticated;
 grant select, insert on table public.friend_heat_runs to anon, authenticated;
+
+notify pgrst, 'reload schema';
+select pg_notification_queue_usage();

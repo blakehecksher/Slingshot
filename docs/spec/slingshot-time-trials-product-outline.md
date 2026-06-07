@@ -113,7 +113,7 @@ Needed elements:
 - Hull or impact tolerance.
 - Split delta.
 - Personal best or ghost delta.
-- Trajectory/minimap.
+- Trajectory prediction or equivalent field-readable guidance.
 - Gravity danger/readability.
 - Ghost ship when active.
 - Invalid, wreck, finish, and reset states.
@@ -121,7 +121,7 @@ Needed elements:
 Notes:
 
 - The HUD should serve decisions at speed.
-- The trajectory/minimap is likely a signature screen element and should be treated as core, not debug.
+- Avoid a persistent minimap. It adds render/HUD cost without enough racing value; prefer in-world gate, field, ghost, and optional debug trajectory cues.
 
 #### 5. Pause Menu
 
@@ -195,7 +195,6 @@ Needed elements:
 - Vibration strength.
 - Camera shake strength.
 - HUD scale.
-- Minimap size.
 - Ghost opacity.
 - Audio levels.
 - Graphics quality.
@@ -305,7 +304,7 @@ Asteroid gravity is the signature mechanic. The player should read gravity wells
 
 ### Ideas
 
-- Make gravity readable through trajectory prediction, minimap language, screen/audio feedback, and asteroid visual treatment.
+- Make gravity readable through trajectory prediction when useful, in-world route cues, screen/audio feedback, and asteroid visual treatment.
 - Reward close passes without making every optimal line invisible or unintuitive.
 - Courses should be designed around distinct gravity rhythms.
 
@@ -319,7 +318,7 @@ Asteroid gravity is the signature mechanic. The player should read gravity wells
 
 ### Implementation notes
 
-- Current branch has custom asteroid gravity, trajectory prediction, minimap markers, and course-specific asteroid tuning.
+- Current branch has custom asteroid gravity, trajectory prediction, in-world route/gate cues, and course-specific asteroid tuning.
 
 ---
 
@@ -530,14 +529,14 @@ The HUD should serve racing decisions and keep the world readable at speed.
 - Boost/energy.
 - Hull/damage.
 - Split delta.
-- Trajectory/minimap.
+- Trajectory prediction or in-world route guidance.
 - Gravity danger.
 - Off-screen gate guidance.
 
 ### Open questions
 
 - Which HUD elements are always visible versus toggleable?
-- Should the trajectory minimap be the visual signature of the game?
+- How much trajectory guidance should be visible during normal racing versus debug/tuning?
 - How should invalid, wreck, and finish states interrupt the HUD?
 
 ### Decisions
@@ -545,7 +544,6 @@ The HUD should serve racing decisions and keep the world readable at speed.
 ### Implementation notes
 
 - Current HUD/status can show race time, current gate, best time, split delta, energy, hull, and state when panels are toggled on.
-- Current minimap shows next checkpoint, finish, and ghost marker.
 
 ---
 
@@ -591,7 +589,6 @@ Settings matter because this is a precision controller-first racing game.
 - Vibration strength.
 - Camera shake strength.
 - HUD scale.
-- Minimap size.
 - Ghost opacity.
 - Graphics quality.
 - Fullscreen.

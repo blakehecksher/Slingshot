@@ -26,7 +26,6 @@ import { GameAudio } from './audio/audio';
 import { TuningPanel } from './debug/tuningPanel';
 import { CourseGuideLine } from './render/courseGuideLine';
 import { SpaceDust } from './render/dust';
-import { Minimap } from './render/minimap';
 import { createRenderRig } from './render/scene';
 import { resolveShipVisual } from './render/shipVisual';
 import { TrajectoryRibbon } from './render/trajectory';
@@ -89,7 +88,7 @@ window.addEventListener('pointerdown', unlockAudio);
 window.addEventListener('keydown', unlockAudio);
 window.addEventListener('gamepadconnected', unlockAudio);
 
-const { renderer, composer, scene, camera, skybox } = createRenderRig(canvas);
+const { composer, scene, camera, skybox } = createRenderRig(canvas);
 const physics = new PhysicsWorld(FIXED_DT);
 const input = new Input(canvas);
 const registry = new ContactRegistry();
@@ -98,7 +97,6 @@ const dust = new SpaceDust(scene);
 const asteroidField = new AsteroidField(scene, physics, registry, selectedCourse.seed, selectedCourse.field.gravityAnchors ?? []);
 const courseGuideLine = new CourseGuideLine(scene);
 const trajectoryRibbon = new TrajectoryRibbon(scene);
-const minimap = new Minimap();
 const feedback = new GravityFeedback();
 const energy = new Energy();
 const pickups = new PickupSystem(scene, physics, registry);
@@ -170,8 +168,7 @@ let currentZone: FieldZone = 'open';
 let peakSpeed = 0;
 let accelMag = 0;
 let hasPrevVelocity = false;
-// Keep the world-space prediction ribbon set aside for debugging. The minimap
-// still uses trajectory prediction during normal play.
+// Keep the world-space prediction ribbon set aside for debugging.
 let panelsVisible = false;
 let padDebugVisible = false;
 let finishMessage = '';
@@ -181,8 +178,9 @@ let boostWasActive = false;
 let audioThrustDemand = 0;
 let audioBoost = 0;
 let tutorialTipKeysShown = new Set<string>();
+let countdownCue = 0;
 
-type AppScene = 'title' | 'course' | 'race' | 'pause' | 'invalid' | 'results' | 'settings' | 'friend-entry' | 'friend-lobby' | 'friend-results';
+type AppScene = 'title' | 'course' | 'race' | 'pause' | 'invalid' | 'results' | 'settings' | 'field-notes' | 'friend-entry' | 'friend-lobby' | 'friend-results';
 
 interface UiSettings {
   stickSensitivity: number;
@@ -193,7 +191,6 @@ interface UiSettings {
   invertPitch: boolean;
   invertYaw: boolean;
   hudScale: number;
-  minimapSize: number;
   ghostOpacity: number;
   cameraShake: number;
   rumble: number;
@@ -214,7 +211,6 @@ const DEFAULT_SETTINGS: UiSettings = {
   invertPitch: false,
   invertYaw: false,
   hudScale: 1,
-  minimapSize: 1,
   ghostOpacity: 0.72,
   cameraShake: 1,
   rumble: 1,
@@ -238,6 +234,7 @@ let resultsActionIndex = 0;
 let invalidActionIndex = 0;
 let pauseActionIndex = 0;
 let settingsFocusIndex = 0;
+let fieldNotesActionIndex = 0;
 let crashAutoRestartPending = false;
 let friendEntryFocusIndex = 0;
 let friendLobbyFocusIndex = 0;
@@ -268,7 +265,6 @@ function saveUiSettings(): void {
 
 function applyUiSettings(): void {
   statusBar.style.setProperty('--hud-scale', settings.hudScale.toFixed(2));
-  document.documentElement.style.setProperty('--minimap-scale', settings.minimapSize.toFixed(2));
   audio.setMasterVolume(settings.masterVolume);
   audio.setSfxVolume(settings.sfxVolume);
   audio.setMusicVolume(settings.musicVolume);
@@ -282,7 +278,6 @@ const shipQuat = new THREE.Quaternion();
 const tmpQuat = new THREE.Quaternion();
 const lookQuat = new THREE.Quaternion();
 const lookEuler = new THREE.Euler(0, 0, 0, 'YXZ');
-const shipEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const camOffset = new THREE.Vector3();
 const shipPosVec = new THREE.Vector3();
 const tmpDeathPos = new THREE.Vector3();
@@ -410,6 +405,7 @@ function beginRace(): void {
   prepareCourse(selectedCourse);
   race.start(selectedCourse);
   goOverlayTimer = 0;
+  countdownCue = 4;
   tutorialTipKeysShown = new Set<string>();
   ghostRecorder.reset();
   syncGhostRuns(selectedCourse.id);
@@ -417,7 +413,7 @@ function beginRace(): void {
   appScene = 'race';
   audio.setMusicState('race');
   audio.raceStart();
-  showToast(raceIsHeatAttempt ? 'HEAT ATTEMPT' : tutorialStandbyText(), 900);
+  showToast(raceIsHeatAttempt ? 'HEAT ATTEMPT' : selectedCourse.lore?.launchCallout ?? tutorialStandbyText(), 1300);
 }
 
 function tutorialStandbyText(): string {
@@ -457,7 +453,6 @@ async function finishRace(): Promise<void> {
   if (!finish) return;
   ship.setFrozen(true);
   audio.silence();
-  audio.finishTone();
   audio.setMusicState('results');
   const run = ghostRecorder.complete(finish.courseId, finish.timeSec, finish.splits, ship, race.nextCheckpoint);
   const result = await leaderboard.submitRun(run);
@@ -483,7 +478,10 @@ async function finishRace(): Promise<void> {
       heatNote = ` - heat submit failed: ${shortError(err instanceof Error ? err.message : String(err))}`;
     }
   }
-  finishMessage = `Finish ${formatRaceTime(finish.timeSec)}${result.isPersonalBest ? ' - best run' : ` (${formatDelta(delta)} vs best)`}${remote}${heatNote}`;
+  if (result.isPersonalBest) audio.personalBestTone();
+  else audio.finishTone();
+  const courseNote = selectedCourse.lore?.resultNote ? ` - ${selectedCourse.lore.resultNote}` : '';
+  finishMessage = `Finish ${formatRaceTime(finish.timeSec)}${result.isPersonalBest ? ' - best run' : ` (${formatDelta(delta)} vs best)`}${remote}${heatNote}${courseNote}`;
   raceIsHeatAttempt = false;
   syncGhostRuns(finish.courseId);
   showToast(finishMessage, 3000);
@@ -622,6 +620,11 @@ function handleAppInput(cmd: ShipCommand): void {
     return;
   }
 
+  if (appScene === 'field-notes') {
+    handleFieldNotesInput(cmd);
+    return;
+  }
+
   if (appScene === 'title') {
     handleTitleInput(cmd);
     return;
@@ -662,14 +665,15 @@ function handleAppInput(cmd: ShipCommand): void {
 function handleTitleInput(cmd: ShipCommand): void {
   if (cmd.menuUp) selectCourse(selectedCourseIndex - 1);
   if (cmd.menuDown) selectCourse(selectedCourseIndex + 1);
-  if (cmd.menuLeft) titleActionIndex = wrapIndex(titleActionIndex - 1, 3);
-  if (cmd.menuRight) titleActionIndex = wrapIndex(titleActionIndex + 1, 3);
+  if (cmd.menuLeft) titleActionIndex = wrapIndex(titleActionIndex - 1, 4);
+  if (cmd.menuRight) titleActionIndex = wrapIndex(titleActionIndex + 1, 4);
   if (!cmd.menuConfirm && !cmd.startRace) {
     if (cmd.menuLeft || cmd.menuRight) renderAppScene();
     return;
   }
   if (titleActionIndex === 0) startRace();
   else if (titleActionIndex === 1) openFriendHeatEntry();
+  else if (titleActionIndex === 2) openFieldNotes('title');
   else {
     previousMenuScene = 'title';
     setAppScene('settings', 'Tune controls and readability.');
@@ -679,8 +683,8 @@ function handleTitleInput(cmd: ShipCommand): void {
 function handleCourseInput(cmd: ShipCommand): void {
   if (cmd.menuUp) selectCourse(selectedCourseIndex - 1);
   if (cmd.menuDown) selectCourse(selectedCourseIndex + 1);
-  if (cmd.menuLeft) courseActionIndex = wrapIndex(courseActionIndex - 1, 3);
-  if (cmd.menuRight) courseActionIndex = wrapIndex(courseActionIndex + 1, 3);
+  if (cmd.menuLeft) courseActionIndex = wrapIndex(courseActionIndex - 1, 4);
+  if (cmd.menuRight) courseActionIndex = wrapIndex(courseActionIndex + 1, 4);
   if (cmd.menuBack) {
     setAppScene('title', 'Field terminal ready.');
     return;
@@ -688,6 +692,7 @@ function handleCourseInput(cmd: ShipCommand): void {
   if (cmd.menuConfirm || cmd.startRace) {
     if (courseActionIndex === 0) startRace();
     else if (courseActionIndex === 1) openFriendHeatEntry();
+    else if (courseActionIndex === 2) openFieldNotes('course');
     else {
       previousMenuScene = 'course';
       setAppScene('settings', 'Tune controls and readability.');
@@ -695,6 +700,29 @@ function handleCourseInput(cmd: ShipCommand): void {
     return;
   }
   if (cmd.menuLeft || cmd.menuRight) renderAppScene();
+}
+
+function openFieldNotes(from: AppScene): void {
+  previousMenuScene = from === 'title' ? 'title' : 'course';
+  fieldNotesActionIndex = 0;
+  setAppScene('field-notes', 'Field notes open.');
+}
+
+function handleFieldNotesInput(cmd: ShipCommand): void {
+  if (cmd.menuUp) selectCourse(selectedCourseIndex - 1);
+  if (cmd.menuDown) selectCourse(selectedCourseIndex + 1);
+  if (cmd.menuLeft) fieldNotesActionIndex = wrapIndex(fieldNotesActionIndex - 1, 2);
+  if (cmd.menuRight) fieldNotesActionIndex = wrapIndex(fieldNotesActionIndex + 1, 2);
+  if (cmd.menuBack) {
+    setAppScene(previousMenuScene === 'title' ? 'title' : 'course', 'Course board ready.');
+    return;
+  }
+  if (!cmd.menuConfirm && !cmd.startRace) {
+    if (cmd.menuLeft || cmd.menuRight) renderAppScene();
+    return;
+  }
+  if (fieldNotesActionIndex === 0) startRace();
+  else setAppScene(previousMenuScene === 'title' ? 'title' : 'course', 'Course board ready.');
 }
 
 function openFriendHeatEntry(): void {
@@ -937,15 +965,14 @@ function handleInvalidInput(cmd: ShipCommand): void {
 }
 
 const SETTINGS_ROWS = [
-  'Stick sensitivity',
-  'Turn rate',
-  'Thrust feel',
-  'Strafe strength',
-  'Boost response',
+  'Stick response',
+  'Turn authority',
+  'Throttle bite',
+  'Strafe power',
+  'Boost kick',
   'Invert pitch',
   'Invert yaw',
   'HUD scale',
-  'Minimap size',
   'Rival opacity',
   'Camera shake',
   'Rumble',
@@ -987,16 +1014,15 @@ function adjustSetting(index: number, dir: number): void {
   else if (index === 6) settings.invertYaw = !settings.invertYaw;
   else if (index === 7) {
     settings.hudScale = clamp(settings.hudScale + step * 0.05, 0.8, 1.3);
-  } else if (index === 8) settings.minimapSize = clamp(settings.minimapSize + step * 0.1, 0.7, 1.4);
-  else if (index === 9) settings.ghostOpacity = clamp(settings.ghostOpacity + step * 0.1, 0.2, 1);
-  else if (index === 10) settings.cameraShake = clamp(settings.cameraShake + step * 0.1, 0, 1);
-  else if (index === 11) settings.rumble = clamp(settings.rumble + step * 0.1, 0, 1);
-  else if (index === 12) settings.masterVolume = clamp(settings.masterVolume + step * 0.05, 0, 1);
-  else if (index === 13) settings.sfxVolume = clamp(settings.sfxVolume + step * 0.05, 0, 1);
-  else if (index === 14) settings.musicVolume = clamp(settings.musicVolume + step * 0.05, 0, 1);
-  else if (index === 15) settings.reducedMotion = !settings.reducedMotion;
-  else if (index === 16) settings.colorSafeDanger = !settings.colorSafeDanger;
-  else if (index === 17) {
+  } else if (index === 8) settings.ghostOpacity = clamp(settings.ghostOpacity + step * 0.1, 0.2, 1);
+  else if (index === 9) settings.cameraShake = clamp(settings.cameraShake + step * 0.1, 0, 1);
+  else if (index === 10) settings.rumble = clamp(settings.rumble + step * 0.1, 0, 1);
+  else if (index === 11) settings.masterVolume = clamp(settings.masterVolume + step * 0.05, 0, 1);
+  else if (index === 12) settings.sfxVolume = clamp(settings.sfxVolume + step * 0.05, 0, 1);
+  else if (index === 13) settings.musicVolume = clamp(settings.musicVolume + step * 0.05, 0, 1);
+  else if (index === 14) settings.reducedMotion = !settings.reducedMotion;
+  else if (index === 15) settings.colorSafeDanger = !settings.colorSafeDanger;
+  else if (index === 16) {
     const qualities: UiSettings['graphicsQuality'][] = ['low', 'medium', 'high'];
     settings.graphicsQuality = qualities[wrapIndex(qualities.indexOf(settings.graphicsQuality) + step, qualities.length)];
   }
@@ -1088,6 +1114,7 @@ function tickPhysics(): void {
   if (raceEvent.started) {
     ship.setFrozen(false);
     goOverlayTimer = 0.75;
+    audio.goSignal();
     if (!showTutorialTip('start', selectedCourse.tutorial?.tipTriggers.start, 2400)) {
       showToast('GO', 700);
     }
@@ -1105,6 +1132,9 @@ function tickPhysics(): void {
   shipPosVec.set(p.x, p.y, p.z);
   gravitySample = sampleGravityAt(shipPosVec, asteroidField.asteroids);
   checkTutorialProximityTips();
+  if (gravitySample.strongestPull > 10 && gravitySample.closestClearance < 95) {
+    audio.closeWellWarning(Math.min(1, gravitySample.strongestPull / 24));
+  }
   ship.setAmbientPull(gravitySample.strongestPull);
   ship.setCargoFraction(0);
   ship.applyAcceleration(gravitySample.acceleration, FIXED_DT);
@@ -1131,10 +1161,15 @@ function tickPhysics(): void {
     const accepted = race.checkpoint(gateIdx);
     if (accepted.accepted) {
       const gate = selectedCourse.gates[gateIdx];
-      audio.pickupChime();
+      const personalRecord = leaderboard.getRecord(selectedCourse.id);
+      const split = race.splits[gateIdx];
+      const bestSplit = personalRecord?.bestSplits[gateIdx];
+      const goodSplit = bestSplit === undefined || split <= bestSplit;
+      audio.gatePass(goodSplit);
       if (accepted.finished) void finishRace();
       else if (!showTutorialTip(`gate:${gateIdx}`, selectedCourse.tutorial?.tipTriggers.gates?.[gateIdx], 2200)) {
-        showToast(`${gateIdx + 1}/${selectedCourse.gates.length}  ${gate.label}`, 1000);
+        const delta = bestSplit === undefined ? '' : ` ${formatDelta(split - bestSplit)}`;
+        showToast(`${gateIdx + 1}/${selectedCourse.gates.length}  ${gate.label}${delta}`, 1050);
       }
     }
   }
@@ -1182,8 +1217,13 @@ function tickPhysics(): void {
       }
     }
   });
+  if (lifecycle.current === 'alive' && asteroidField.intersectsVisualHazardSegment(p, ship.position)) {
+    audio.dustImpact(Math.max(0.35, Math.min(1.4, preStepSpeed / 160)));
+    deathThisTick = true;
+  }
 
   if (deathThisTick) {
+    audio.wreckTone();
     tmpDeathPos.set(ship.position.x, ship.position.y, ship.position.z);
     tmpDeathVel.set(ship.linearVelocity.x, ship.linearVelocity.y, ship.linearVelocity.z);
     lifecycle.die(tmpDeathPos, tmpDeathVel);
@@ -1203,19 +1243,6 @@ function render(): void {
   feedback.apply(camera);
   skybox.position.copy(camera.position);
   composer.render();
-
-  const r = ship.body.rotation();
-  shipQuat.set(r.x, r.y, r.z, r.w);
-  shipEuler.setFromQuaternion(shipQuat, 'YXZ');
-  minimap.update(asteroidField.asteroids, trajectory, ship.position, shipEuler.y, {
-    nextCheckpoint: checkpoints.targetPosition(race.nextCheckpoint),
-    finish: selectedCourse.gates[selectedCourse.gates.length - 1]?.position ?? null,
-    ghosts: {
-      top: topGhostReplay.position,
-      personal: personalGhostReplay.position,
-    },
-  });
-  minimap.render(renderer, settings.minimapSize);
   fadeOverlay.style.opacity = String(lifecycle.fadeAlpha);
   if (panelsVisible && padDebugVisible) renderPadDebug();
 }
@@ -1291,41 +1318,107 @@ function updateStatus(): void {
   const best = personalRecord ? formatRaceTime(personalRecord.bestTimeSec) : '--:--.---';
   const boardBest = topRecord ? formatRaceTime(topRecord.bestTimeSec) : '--:--.---';
   const ePct = Math.round(energy.fraction * 100);
-  const energyBar = bar(energy.fraction, 14);
-  const hpBar = bar(ship.hpFraction, 10);
   const splitIndex = race.nextCheckpoint - 1;
-  const splitDelta = personalRecord && splitIndex >= 0 && personalRecord.bestSplits[splitIndex] !== undefined
-    ? formatDelta(race.splits[splitIndex] - personalRecord.bestSplits[splitIndex])
-    : '';
-  const stateLine =
-    race.state === 'countdown' ? `COUNTDOWN ${Math.ceil(race.countdownSec)}` :
-    race.state === 'finished' ? finishMessage :
-    race.state === 'invalid' ? `INVALID - ${race.invalidReason}` :
-    race.state === 'select' ? 'SELECT COURSE' :
-    'RACING';
+  const hasSplit = !!personalRecord && splitIndex >= 0 && personalRecord.bestSplits[splitIndex] !== undefined;
+  const splitRaw = hasSplit ? race.splits[splitIndex] - personalRecord!.bestSplits[splitIndex]! : 0;
+  const splitDelta = hasSplit ? formatDelta(splitRaw) : '';
+  const splitClass = !hasSplit ? 'none' : splitRaw > 0 ? 'slow' : 'fast';
 
-  const gateNow = Math.min(race.nextCheckpoint + 1, selectedCourse.gates.length);
+  // State readout in field-pilot language, not sterile UI labels.
+  const stateText =
+    race.state === 'countdown' ? `HOLD ${Math.ceil(race.countdownSec)}` :
+    race.state === 'finished' ? finishMessage :
+    race.state === 'invalid' ? `SCRUBBED · ${race.invalidReason}` :
+    race.state === 'select' ? 'PICK A LANE' :
+    'ON THE CLOCK';
+  const stateClass =
+    race.state === 'invalid' ? 'alert' :
+    race.state === 'finished' ? 'go' : '';
+
+  // Gate progress as bolt-pips; fall back to a count for long courses.
+  const totalGates = selectedCourse.gates.length;
+  const doneGates = Math.min(race.nextCheckpoint, totalGates);
+  const MAX_PIPS = 12;
+  let pips = '';
+  if (totalGates <= MAX_PIPS) {
+    for (let i = 0; i < totalGates; i++) {
+      const cls = i < doneGates ? 'done' : i === doneGates ? 'now' : '';
+      pips += `<span class="pip ${cls}"></span>`;
+    }
+  } else {
+    pips = `<span class="chrono-records"><b>${Math.min(doneGates + 1, totalGates)}</b> / ${totalGates} GATES</span>`;
+  }
+
+  // Gravity well danger escalates the right-hand readout (teal -> red).
+  const pull = gravitySample.strongestPull;
+  const clear = gravitySample.closestClearance;
+  const wellLvl = pull >= 30 || (Number.isFinite(clear) && clear < 70) ? 3
+    : pull >= 15 ? 2
+    : pull >= 5 ? 1
+    : 0;
+  const wellSub = Number.isFinite(clear) ? `${clear.toFixed(0)}M CLEAR` : 'OPEN SPACE';
+
+  const SPEED_REF = 360; // gauge fill reference, not a hard cap
+  const speedPct = Math.max(0, Math.min(1, ship.speed / SPEED_REF)) * 100;
+  const hpPct = Math.max(0, Math.min(1, ship.hpFraction)) * 100;
+
   statusBar.innerHTML = `
-    <div class="hud-tile primary"><span>Time</span><b>${formatRaceTime(race.elapsedSec)}</b><em>${stateLine}</em></div>
-    <div class="hud-tile"><span>Gate</span><b>${gateNow}/${selectedCourse.gates.length}</b><em>${splitDelta || 'split --'}</em></div>
-    <div class="hud-tile"><span>Speed</span><b>${ship.speed.toFixed(0)} m/s</b><em>peak ${peakSpeed.toFixed(0)}</em></div>
-    <div class="hud-tile"><span>Energy</span><b>${energyBar} ${ePct}%</b><em>boost ${Math.round(audioBoost * 100)}%</em></div>
-    <div class="hud-tile"><span>Hull</span><b>${hpBar}</b><em>${Math.round(ship.hp)} / ${Math.round(ship.hpMax)}</em></div>
-    <div class="hud-tile"><span>Records</span><b>PB ${best}</b><em>lead ${boardBest}</em></div>
-    <div class="hud-tile danger"><span>Gravity</span><b>${gravitySample.strongestPull.toFixed(1)} m/s2</b><em>${Number.isFinite(gravitySample.closestClearance) ? `${gravitySample.closestClearance.toFixed(0)}m clear` : 'open space'}</em></div>
+    <div class="rig-side left">
+      <div class="gauge">
+        <span class="gauge-label">Velocity</span>
+        <div class="gauge-row"><span class="gauge-val">${ship.speed.toFixed(0)}<i>m/s</i></span><span class="sub">pk ${peakSpeed.toFixed(0)}</span></div>
+        <div class="meter amber"><div class="meter-fill" style="width:${speedPct.toFixed(0)}%"></div></div>
+      </div>
+      <div class="gauge${energy.fraction < 0.2 ? ' low' : ''}">
+        <span class="gauge-label">Cell · Boost ${Math.round(audioBoost * 100)}%</span>
+        <div class="meter"><div class="meter-fill" style="width:${ePct}%"></div></div>
+      </div>
+    </div>
+    <div class="rig-chrono">
+      <div class="chrono-gates">${pips}</div>
+      <span class="chrono-time">${formatRaceTime(race.elapsedSec)}</span>
+      <div class="chrono-foot">
+        <span class="state ${stateClass}">${stateText}</span>
+        <span class="split ${splitClass}">${splitDelta || 'split --'}</span>
+      </div>
+      <div class="chrono-records">PB <b>${best}</b> · LEAD <b>${boardBest}</b></div>
+    </div>
+    <div class="rig-side right">
+      <div class="gauge well lvl${wellLvl}">
+        <span class="gauge-label">Well Pull</span>
+        <div class="gauge-row"><span class="gauge-val">${pull.toFixed(1)}<i>m/s²</i></span></div>
+        <span class="sub">${wellSub}</span>
+      </div>
+      <div class="gauge${ship.hpFraction < 0.3 ? ' low' : ''}">
+        <span class="gauge-label">Hull · ${Math.round(ship.hp)}/${Math.round(ship.hpMax)}</span>
+        <div class="meter amber"><div class="meter-fill" style="width:${hpPct.toFixed(0)}%"></div></div>
+      </div>
+    </div>
   `;
 }
 
 function updateCountdownOverlay(dt: number): void {
   let text = '';
+  let detail = '';
   if (race.state === 'countdown') {
-    text = String(Math.max(1, Math.ceil(race.countdownSec)));
+    const whole = Math.max(1, Math.ceil(race.countdownSec));
+    text = String(whole);
+    detail = selectedCourse.name;
+    if (whole !== countdownCue) {
+      countdownCue = whole;
+      audio.countdownTick();
+    }
   } else if (goOverlayTimer > 0) {
     text = 'GO';
+    detail = selectedCourse.lore?.launchCallout ?? selectedCourse.name;
     goOverlayTimer = Math.max(0, goOverlayTimer - dt);
+  } else {
+    countdownCue = 0;
   }
 
-  countdownOverlay.textContent = text;
+  countdownOverlay.innerHTML = text
+    ? `<span class="countdown-main">${escapeHtml(text)}</span><span class="countdown-course">${escapeHtml(detail)}</span>`
+    : '';
   countdownOverlay.classList.toggle('visible', text.length > 0);
 }
 
@@ -1339,8 +1432,10 @@ function renderPadDebug(): void {
 }
 
 function renderControls(): void {
+  const pad = input.readGamepad();
   controls.innerHTML = `
     <h3>SLINGSHOT LEAGUE</h3>
+    <div class="row"><b>Pad</b> ${pad ? `linked - ${escapeHtml(pad.id)}` : 'standby'}</div>
     <div class="row"><b>Gamepad</b> L stick pitch/roll, R stick yaw/up-down</div>
     <div class="row"><b>Gamepad</b> D-pad strafe</div>
     <div class="row"><b>Gamepad</b> RT/LT thrust/reverse, LB/RB boost</div>
@@ -1371,6 +1466,7 @@ function renderAppScene(message = menuMessage, recordOverride?: CourseRecord): v
     appScene === 'pause' ? renderPauseScene() :
     appScene === 'invalid' ? renderInvalidScene(message) :
     appScene === 'results' ? renderResultsScene(recordOverride) :
+    appScene === 'field-notes' ? renderFieldNotesScene(message) :
     appScene === 'friend-entry' ? renderFriendEntryScene(message) :
     appScene === 'friend-lobby' ? renderFriendLobbyScene(message) :
     appScene === 'friend-results' ? renderFriendResultsScene(message) :
@@ -1380,7 +1476,7 @@ function renderAppScene(message = menuMessage, recordOverride?: CourseRecord): v
   coursePanel.style.display = '';
   wireSceneEvents();
   if (appScene === 'settings') scrollSettingsFocusIntoView();
-  if (appScene === 'title' || appScene === 'course') scrollSelectedCourseIntoView();
+  if (appScene === 'title' || appScene === 'course' || appScene === 'field-notes') scrollSelectedCourseIntoView();
 }
 
 function renderTitleScene(_message: string): string {
@@ -1389,6 +1485,45 @@ function renderTitleScene(_message: string): string {
 
 function renderCourseBoard(_message: string): string {
   return renderStartScreen('course');
+}
+
+function renderFieldNotesScene(_message: string): string {
+  const lore = selectedCourse.lore;
+  const actions = ['Start race', 'Back to board']
+    .map((label, index) => menuButton(label, index === fieldNotesActionIndex, `field-notes-action-${index}`)).join('');
+  const anchorCount = selectedCourse.field.gravityAnchorCount;
+  const deadIronRead = anchorCount <= 0
+    ? 'No marked anchor bodies on the racing line.'
+    : `${anchorCount} marked Dead Iron ${anchorCount === 1 ? 'body' : 'bodies'} near the route.`;
+  const gateNames = selectedCourse.gates.map((gate) => gate.label).join(' / ');
+
+  return sceneShell('Field Notes', selectedCourse.name, lore?.fieldNote ?? selectedCourse.summary, `
+    <div class="field-notes-layout">
+      <section class="terminal-panel field-notes-main">
+        <div class="section-title"><h2>Dead Iron Brief</h2><span>${escapeHtml(biomeLabel(selectedCourse))}</span></div>
+        <div class="field-note-callout">${escapeHtml(lore?.fieldNote ?? selectedCourse.summary)}</div>
+        <p>${escapeHtml(lore?.codexEntry ?? 'This course is logged on the claim board as a gravity racing lane. Read the gates, watch the field cues, and keep the ship out of capture lines.')}</p>
+        <div class="terminal-readout">
+          <span>Difficulty</span><b>${escapeHtml(difficultyLabel(selectedCourse))}</b>
+          <span>Gravity</span><b>${escapeHtml(gravityLabel(selectedCourse))}</b>
+          <span>Dead Iron</span><b>${escapeHtml(deadIronRead)}</b>
+          <span>Route</span><b>${escapeHtml(gateNames)}</b>
+        </div>
+        <div class="field-rules">
+          <span>Close passes create speed and stress.</span>
+          <span>Heavy rocks are safest when you are already leaving them.</span>
+          <span>The ghost line is a rival, not an order.</span>
+        </div>
+        <div class="scene-actions">${actions}</div>
+      </section>
+      <section class="terminal-panel field-notes-side">
+        <div class="section-title"><h2>Course Stack</h2><span>D-pad up/down changes file</span></div>
+        <div class="field-course-list">
+          ${RACE_COURSES.map((course, index) => startCourseRow(course, index)).join('')}
+        </div>
+      </section>
+    </div>
+  `);
 }
 
 function renderStartScreen(mode: 'title' | 'course'): string {
@@ -1451,7 +1586,9 @@ function renderStartScreen(mode: 'title' | 'course'): string {
         </section>
       </main>
       <div class="menu-hints start-hints">
-        <button id="${actionPrefix}-2" class="footer-settings${activeAction === 2 ? ' selected' : ''}">Settings</button>
+        <button id="${actionPrefix}-2" class="footer-settings${activeAction === 2 ? ' selected' : ''}">Field Notes</button>
+        <button id="${actionPrefix}-3" class="footer-settings${activeAction === 3 ? ' selected' : ''}">Settings</button>
+        <span>${input.readGamepad() ? 'Controller linked' : 'Controller standby'}</span>
         <span>D-pad / stick: course</span>
         <span>Left / right: action</span>
         <span>A / Enter: confirm</span>
@@ -1476,11 +1613,12 @@ function renderPauseScene(): string {
 
 function renderInvalidScene(message: string): string {
   const actions = ['Retry', 'Course board'].map((label, index) => menuButton(label, index === invalidActionIndex, `invalid-action-${index}`)).join('');
+  const warning = selectedCourse.lore?.fieldNote ?? 'That rock was pulling hard.';
   return sceneShell('Run Lost', selectedCourse.name, message || race.invalidReason, `
     <div class="center-panel">
       <section class="terminal-panel lost-panel">
         <div class="section-title"><h2>${escapeHtml(race.invalidReason || 'Wrecked')}</h2><span>${formatRaceTime(race.elapsedSec)}</span></div>
-        <p class="field-warning">That rock was pulling hard.</p>
+        <p class="field-warning">${escapeHtml(warning)}</p>
         <div class="scene-actions">${actions}</div>
       </section>
     </div>
@@ -1762,18 +1900,19 @@ function wireFriendSceneEvents(): void {
 }
 
 function renderSettingsScene(message: string): string {
+  const pad = input.readGamepad();
   return `
     <div class="settings-card" role="dialog" aria-label="Settings">
       <header class="settings-card-head">
         <div>
           <div class="league-title">Settings</div>
           <h1>Controls</h1>
-          <p>${escapeHtml(message)}</p>
+          <p>${escapeHtml(message)} ${pad ? `Controller linked: ${pad.id}` : 'Controller standby: press a gamepad button to link.'}</p>
         </div>
         <button class="settings-close" id="settings-back">Back</button>
       </header>
       <section class="terminal-panel settings-panel">
-        <div class="section-title"><h2>Precision Controls</h2><span>A toggles, left/right adjusts</span></div>
+        <div class="section-title"><h2>Controller Feel</h2><span>A toggles, left/right adjusts</span></div>
         <div class="settings-grid">${SETTINGS_ROWS.map((label, index) => settingRow(label, index)).join('')}</div>
       </section>
       <div class="menu-hints"><span>D-pad / stick: move</span><span>A: adjust</span><span>B: back</span><span>Start: pause</span></div>
@@ -1816,7 +1955,7 @@ function courseButton(course: RaceCourse, index: number, compact = false): strin
     <span class="course-number">${String(index + 1).padStart(2, '0')}</span>
     <span class="course-main">
       <strong>${escapeHtml(course.name)}</strong>
-      <small>${escapeHtml(compact ? biomeLabel(course) : course.summary)}</small>
+      <small>${escapeHtml(compact ? biomeLabel(course) : course.lore?.fieldNote ?? course.summary)}</small>
       <span class="course-meta">
         <em>${record ? formatRaceTime(record.bestTimeSec) : '--:--.---'}</em>
         <em>${course.gates.length} gates</em>
@@ -1837,7 +1976,7 @@ function startCourseRow(course: RaceCourse, index: number): string {
       <strong>${escapeHtml(course.name)}</strong>
       ${course.tutorial ? '<b class="training-badge">Training</b>' : ''}
     </span>
-    <small>${escapeHtml(course.tutorial?.lessonSummary ?? course.summary)}</small>
+    <small>${escapeHtml(course.tutorial?.lessonSummary ?? course.lore?.fieldNote ?? course.summary)}</small>
     <span class="start-course-meta">
       <em>${escapeHtml(difficultyLabel(course))}</em>
       <em>${course.gates.length} gates</em>
@@ -2036,16 +2175,15 @@ function settingValue(index: number): string {
   if (index === 5) return settings.invertPitch ? 'on' : 'off';
   if (index === 6) return settings.invertYaw ? 'on' : 'off';
   if (index === 7) return `${Math.round(settings.hudScale * 100)}%`;
-  if (index === 8) return `${Math.round(settings.minimapSize * 100)}%`;
-  if (index === 9) return `${Math.round(settings.ghostOpacity * 100)}%`;
-  if (index === 10) return `${Math.round(settings.cameraShake * 100)}%`;
-  if (index === 11) return `${Math.round(settings.rumble * 100)}%`;
-  if (index === 12) return `${Math.round(settings.masterVolume * 100)}%`;
-  if (index === 13) return `${Math.round(settings.sfxVolume * 100)}%`;
-  if (index === 14) return `${Math.round(settings.musicVolume * 100)}%`;
-  if (index === 15) return settings.reducedMotion ? 'on' : 'off';
-  if (index === 16) return settings.colorSafeDanger ? 'on' : 'off';
-  if (index === 17) return settings.graphicsQuality;
+  if (index === 8) return `${Math.round(settings.ghostOpacity * 100)}%`;
+  if (index === 9) return `${Math.round(settings.cameraShake * 100)}%`;
+  if (index === 10) return `${Math.round(settings.rumble * 100)}%`;
+  if (index === 11) return `${Math.round(settings.masterVolume * 100)}%`;
+  if (index === 12) return `${Math.round(settings.sfxVolume * 100)}%`;
+  if (index === 13) return `${Math.round(settings.musicVolume * 100)}%`;
+  if (index === 14) return settings.reducedMotion ? 'on' : 'off';
+  if (index === 15) return settings.colorSafeDanger ? 'on' : 'off';
+  if (index === 16) return settings.graphicsQuality;
   if (index === SETTINGS_RESET_INDEX) return 'restore';
   return settings.graphicsQuality;
 }
@@ -2069,7 +2207,7 @@ function wireSceneEvents(): void {
     event.preventDefault();
     pilotInput.blur();
   });
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     coursePanel.querySelector<HTMLButtonElement>(`#title-action-${i}`)?.addEventListener('click', () => {
       titleActionIndex = i;
       handleTitleInput({ ...emptyMenuCommand(), menuConfirm: true });
@@ -2077,6 +2215,12 @@ function wireSceneEvents(): void {
     coursePanel.querySelector<HTMLButtonElement>(`#course-action-${i}`)?.addEventListener('click', () => {
       courseActionIndex = i;
       handleCourseInput({ ...emptyMenuCommand(), menuConfirm: true });
+    });
+  }
+  for (let i = 0; i < 2; i++) {
+    coursePanel.querySelector<HTMLButtonElement>(`#field-notes-action-${i}`)?.addEventListener('click', () => {
+      fieldNotesActionIndex = i;
+      handleFieldNotesInput({ ...emptyMenuCommand(), menuConfirm: true });
     });
   }
   wireFriendSceneEvents();
@@ -2841,6 +2985,9 @@ function injectRaceStyles(): void {
       }
       #course-select .course-footer {
         align-items: stretch;
+      }
+      #course-select .field-notes-layout {
+        grid-template-columns: 1fr;
       }
       #course-select .course-actions,
       #course-select .course-actions button {
@@ -4180,6 +4327,53 @@ function injectRaceStyles(): void {
       border-color: var(--c-accent);
       outline: 1px solid var(--c-teal);
     }
+    #course-select .field-notes-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 0.62fr);
+      gap: 14px;
+      margin-top: 18px;
+    }
+    #course-select .field-notes-main,
+    #course-select .field-notes-side {
+      min-width: 0;
+    }
+    #course-select .field-note-callout {
+      border-left: 3px solid var(--c-accent);
+      background: var(--c-bg-2);
+      color: var(--c-text-strong);
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: var(--fs-body);
+      line-height: 1.45;
+    }
+    #course-select .field-rules {
+      display: grid;
+      gap: 8px;
+      margin: 12px 0 2px;
+    }
+    #course-select .field-rules span {
+      border: 1px solid var(--c-border);
+      background: var(--c-bg-1);
+      color: var(--c-text-muted);
+      padding: 8px 10px;
+      font-size: var(--fs-small);
+      line-height: 1.35;
+    }
+    #course-select .field-course-list {
+      display: grid;
+      gap: 0;
+      max-height: min(500px, calc(100vh - 330px));
+      overflow-y: auto;
+      border: 1px solid var(--c-border);
+    }
+    #course-select .field-course-list .start-course-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: 12px;
+    }
+    #course-select .field-course-list .start-course-row small,
+    #course-select .field-course-list .start-course-zone {
+      display: none;
+    }
     #course-select .start-hints span {
       border-color: var(--c-border);
       background: var(--c-bg-1);
@@ -4195,6 +4389,8 @@ function injectRaceStyles(): void {
       z-index: 46;
       display: grid;
       place-items: center;
+      align-content: center;
+      gap: 10px;
       pointer-events: none;
       opacity: 0;
       color: #fff8e8;
@@ -4206,6 +4402,20 @@ function injectRaceStyles(): void {
       text-shadow: 0 8px 32px rgba(0, 0, 0, 0.72), 0 0 34px rgba(93, 255, 154, 0.42);
       transition: opacity 0.08s linear, transform 0.08s linear;
       transform: scale(0.96);
+    }
+    #race-countdown .countdown-main,
+    #race-countdown .countdown-course {
+      display: block;
+      text-align: center;
+    }
+    #race-countdown .countdown-course {
+      max-width: min(860px, 86vw);
+      color: var(--c-accent);
+      font: var(--fw-bold) clamp(13px, 2vw, 22px) var(--font-mono);
+      letter-spacing: 0.12em;
+      line-height: 1.25;
+      text-transform: uppercase;
+      text-shadow: 0 4px 18px rgba(0, 0, 0, 0.8);
     }
     #race-countdown.visible {
       opacity: 1;
@@ -4359,13 +4569,6 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-}
-
-function bar(frac: number, width: number): string {
-  const f = Math.max(0, Math.min(1, frac));
-  const filled = Math.round(f * width);
-  const empty = width - filled;
-  return `<span class="bar"><span class="bar-filled">${'█'.repeat(filled)}</span>${'░'.repeat(empty)}</span>`;
 }
 
 let toastTimer = 0;

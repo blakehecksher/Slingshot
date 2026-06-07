@@ -50,12 +50,11 @@ Controller flight feel has been rolled back to the fixed GitHub baseline and bui
 - Race ghost playback now supports two simultaneous lines: the shared top-board ghost is blue, and the local personal-best ghost is orange.
 - Personal-best ghosts remain localStorage-backed; Supabase top-board fetches no longer overwrite the local PB record.
 - Ghosts now carry a distance-scaled glow aura so far-away blue/orange ghost positions are easier to track.
-- The world-space green trajectory ribbon is hidden during normal play and appears only when debug/info panels are toggled on with `O`/`H`; trajectory prediction still feeds the minimap.
+- The world-space green trajectory ribbon is hidden during normal play and appears only when debug/info panels are toggled on with `O`/`H`.
 - HUD/status shows race time, current gate, best time, split delta, energy, hull, and state when panels are toggled on.
-- Minimap shows next checkpoint, finish, and ghost marker.
 - Title/course board now includes a records comparison panel tied to the personal-best area, with per-gate deltas and a compact line graph for latest run, PB, and leader data when available.
-- The minimap is now a 3D holographic sphere that maps nearby asteroids, trajectory, next gate, finish, and separate top/PB ghost markers.
-- Settings now persist under `localStorage["slingshot.uiSettings.v1"]` and include ship-feel, HUD/minimap, ghost, feedback, audio controls, and a return-to-defaults row.
+- The in-race minimap has been removed to reduce HUD/render cost; route reading now relies on gates, the world-space course guide, ghosts, feedback, and the optional debug trajectory ribbon.
+- Settings now persist under `localStorage["slingshot.uiSettings.v1"]` and include ship-feel, HUD, ghost, feedback, audio controls, and a return-to-defaults row.
 - Settings opened from pause freeze the race again and use a compact standalone terminal card with a single scrollable settings column.
 - The in-race Start/pause menu no longer includes `Change course`; course changes stay on the title/course board.
 - Gamepad Y now toggles cockpit/chase camera, and Back/Select restarts the current run.
@@ -73,8 +72,7 @@ Controller flight feel has been rolled back to the fixed GitHub baseline and bui
 - Title/course board re-renders now scroll the selected course row into view.
 - Dense asteroid fields use lower asteroid mesh detail and fewer decorative glints/rings at high procedural counts.
 - Gravity sampling ignores very distant passive rocks while preserving nearby rocks and large landmarks, keeping large dense fields practical.
-- The minimap now displays nearby visible asteroids instead of the first generated asteroids, and its range is expanded for long-course navigation.
-- Asteroid fields now support a visual-only instanced layer via `VISUAL_COUNT`; those rocks render as background density but do not create Rapier colliders, do not affect gravity, and do not enter trajectory/minimap sampling.
+- Asteroid fields now support a visual-only instanced layer via `VISUAL_COUNT`; those rocks render as background density but do not create Rapier colliders and do not affect gravity or trajectory sampling.
 - Claim Traverse now uses 900 real procedural asteroids plus 5,600 visual-only instanced asteroids, instead of 5,200 real procedural asteroids.
 - Three additional traverse-family courses are implemented and build-checked: Far Wake Run, Iron Meridian, and Blackglass Crossing. They use 860-980 real procedural asteroids plus 5,400-6,400 visual-only instanced asteroids.
 - The base/station is no longer spawned in the racing entrypoint.
@@ -92,13 +90,13 @@ Cross-scene UI consistency pass landed. `src/render/theme.ts` now holds the desi
 
 Course guide line and course-board selected-row scrolling are implemented and build-checked. Vite returned HTTP 200 locally, but browser automation could not attach to `iab`, so both changes still need manual visual/controller verification on the active Claim courses.
 
-UI/settings/audio/records/minimap polish has a first implementation and follow-up fixes for harsh sounds, settings layout, pause menu redundancy, gamepad mapping, constant music-drone hum, settings focus scrolling, held D-pad repeat, crash auto-restart, and simplified results/setup scene flow. It builds cleanly and still needs manual browser/audio/controller review.
+UI/settings/audio/records polish has a first implementation and follow-up fixes for harsh sounds, settings layout, pause menu redundancy, gamepad mapping, constant music-drone hum, settings focus scrolling, held D-pad repeat, crash auto-restart, and simplified results/setup scene flow. It builds cleanly and still needs manual browser/audio/controller review.
 
 First pass implementation for the full time-trial scene flow is complete and build-checked. The start screen has been redesigned and build-checked; it still needs manual visual/controller playtesting in browser, especially with a physical Xbox controller.
 
 Dual-ghost implementation is build-checked and ready for browser playtesting against courses with both a Supabase top run and a local PB.
 
-Trajectory ribbon debug gating is build-checked. It still needs quick browser confirmation that `O`/`H` hides/shows the world-space line with the panels while the minimap remains active.
+Trajectory ribbon debug gating is build-checked. It still needs quick browser confirmation that `O`/`H` hides/shows the world-space line with the panels.
 
 Repository cleanup pass completed. Generated build/browser artifacts were removed, the Supabase setup SQL moved to `docs/database/`, and `.gitignore` now allows `docs/spec/archive/` to be tracked as historical context.
 
@@ -118,9 +116,9 @@ Friend Heat multiplayer is now implemented in code. New Supabase tables (`friend
 
 - Build chunk > 500 kB warning remains (Three + Rapier WASM). Defer.
 - Favicon 404 remains cosmetic.
-- Browser automation reported the `iab` browser unavailable during the tutorial onboarding session. The latest tutorial maps and UI/HUD/minimap/settings/crash/results-flow changes have not been visually inspected by automation. They were build-checked; manual browser/controller/audio playtest remains needed.
+- Browser automation reported the `iab` browser unavailable during the tutorial onboarding session. The latest tutorial maps and UI/HUD/settings/crash/results-flow changes have not been visually inspected by automation. They were build-checked; manual browser/controller/audio playtest remains needed.
 - Browser automation again reported the `iab` browser unavailable during the course guide line session. The guide line and course-list scroll fix have not been visually inspected by automation.
-- Browser automation again reported the `iab` browser unavailable during the controller flight overhaul session. The controller overhaul and commanded/drift minimap line are build-checked but not visually inspected in browser automation.
+- Browser automation again reported the `iab` browser unavailable during the controller flight overhaul session. The controller overhaul and trajectory guidance changes are build-checked but not visually inspected in browser automation.
 - Browser automation reported `iab` unavailable during the 2026-06-06 course catalog reset. A hidden Vite process printed `http://127.0.0.1:5173/Slingshot/`, but exited before an HTTP smoke check could connect.
 - Vite reached ready state when started in a hidden background process for the tutorial onboarding session, but the process exited before an HTTP smoke check could connect.
 - Vite again reached ready state on `http://127.0.0.1:5174/Slingshot/` from a hidden process during the controller overhaul session, but the later HTTP smoke check could not connect.
@@ -137,13 +135,13 @@ Friend Heat multiplayer is now implemented in code. New Supabase tables (`friend
 ## Next actions
 1. Browser/controller playtest the active eight-course lineup: Claim Shakedown, Claim Highline, Claim Crosswind, Claim Iron Hook, Claim Traverse, Far Wake Run, Iron Meridian, and Blackglass Crossing.
 2. Tune Claim Highline/Crosswind/Iron Hook gate positions, gate radii, asteroid counts, and medal times against Claim Shakedown.
-3. Playtest the traverse-family maps specifically for frame rate, asteroid readability, minimap usefulness, route length, and whether the real/visual asteroid splits feel dense enough without becoming noisy.
+3. Playtest the traverse-family maps specifically for frame rate, asteroid readability, route length, and whether the real/visual asteroid splits feel dense enough without becoming noisy.
 4. Tune traverse-family medal times, gate spacing, authored Dead Iron massScale values, and procedural/visual density after hands-on runs.
-5. Manually inspect the faint course guide line and commanded/drift minimap lines in live races; tune opacity/color if they compete with gates, ghosts, or asteroid readability.
+5. Manually inspect the faint course guide line and trajectory/debug cues in live races; tune opacity/color if they compete with gates, ghosts, or asteroid readability.
 6. Manually verify the course board scrolls the selected course row into view with keyboard/controller navigation.
 7. Apply the updated `docs/database/supabase-racing.sql` to the live Supabase project so the `friend_heat_*` tables and RLS exist before testing.
 8. Two-browser Friend Heat smoke test: create a lobby, share invite code, both pilots mark ready, host starts heat, both submit runs, verify lobby-best ghost appears on the next attempt only, and that finished runs also land on the global leaderboard.
-9. Manually inspect and playtest the UI/settings/audio/records/minimap/crash-restart/results pass in browser at desktop and mobile widths with controller navigation.
+9. Manually inspect and playtest the UI/settings/audio/records/crash-restart/results pass in browser at desktop and mobile widths with controller navigation.
 10. Verify records comparison with courses that have local PB and Supabase top-run split data.
 11. Add course-generation helpers that enforce gate clearance/corridor rules and support authored gravity-anchor asteroids from the field recipes.
 12. Add a course debug/lab view for route lines, gate labels, gate-clearance volumes, and gravity-readability checks.

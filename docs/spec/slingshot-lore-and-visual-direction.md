@@ -143,7 +143,7 @@ Gameplay feeling:
 
 - learn gates
 - learn boost
-- learn trajectory minimap
+- learn gravity and route-reading cues
 - forgiving slingshots
 
 ### Dead Iron Belt

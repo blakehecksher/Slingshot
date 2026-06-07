@@ -93,6 +93,14 @@ const visualQuat = new THREE.Quaternion();
 const visualScale = new THREE.Vector3();
 const visualEuler = new THREE.Euler();
 const visualColor = new THREE.Color();
+const visualPosition = new THREE.Vector3();
+
+interface VisualHazard {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly radius: number;
+}
 
 function seededNoise(n: number): number {
   const s = Math.sin(n * 12.9898) * 43758.5453;
@@ -112,6 +120,27 @@ function buildAsteroidGeometry(radius: number, seed: number): THREE.BufferGeomet
     const n2 = seededNoise(seed * 3.7 + normal.x * 71.9 - normal.y * 19.1 + normal.z * 11.8);
     const bulge = 0.72 + n1 * 0.42 + n2 * 0.14;
     v.copy(normal).multiplyScalar(radius * bulge);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+
+  geom.computeVertexNormals();
+  geom.computeBoundingSphere();
+  return geom;
+}
+
+function buildVisualAsteroidGeometry(seed: number): THREE.BufferGeometry {
+  const geom = new THREE.IcosahedronGeometry(1, 1);
+  const pos = geom.getAttribute('position') as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const normal = v.clone().normalize();
+    const ridge = Math.abs(normal.x * 0.7 - normal.y * 0.35 + normal.z * 0.9);
+    const n1 = seededNoise(seed + normal.x * 29.3 + normal.y * 47.1 + normal.z * 61.7);
+    const n2 = seededNoise(seed * 2.1 - normal.x * 83.5 + normal.y * 13.9 + normal.z * 37.4);
+    const faceted = 0.68 + n1 * 0.36 + n2 * 0.16 + ridge * 0.08;
+    v.copy(normal).multiplyScalar(faceted);
     pos.setXYZ(i, v.x, v.y, v.z);
   }
 
@@ -228,6 +257,7 @@ export class AsteroidField {
   private seedBase: number;
   private gravityAnchors: readonly CourseGravityAnchor[];
   private visualField: THREE.InstancedMesh | null = null;
+  private visualHazards: VisualHazard[] = [];
 
   constructor(scene: THREE.Scene, physics: PhysicsWorld, registry: ContactRegistry, seedBase = 200, gravityAnchors: readonly CourseGravityAnchor[] = []) {
     this.scene = scene;
@@ -249,6 +279,43 @@ export class AsteroidField {
     }
   }
 
+  intersectsVisualHazardSegment(
+    from: { x: number; y: number; z: number },
+    to: { x: number; y: number; z: number },
+    shipRadius = 2.0,
+  ): boolean {
+    if (this.visualHazards.length <= 0) return false;
+
+    const abx = to.x - from.x;
+    const aby = to.y - from.y;
+    const abz = to.z - from.z;
+    const abLenSq = abx * abx + aby * aby + abz * abz;
+
+    for (const hazard of this.visualHazards) {
+      let closestX = from.x;
+      let closestY = from.y;
+      let closestZ = from.z;
+
+      if (abLenSq > 0.0001) {
+        const apx = hazard.x - from.x;
+        const apy = hazard.y - from.y;
+        const apz = hazard.z - from.z;
+        const t = Math.max(0, Math.min(1, (apx * abx + apy * aby + apz * abz) / abLenSq));
+        closestX += abx * t;
+        closestY += aby * t;
+        closestZ += abz * t;
+      }
+
+      const dx = hazard.x - closestX;
+      const dy = hazard.y - closestY;
+      const dz = hazard.z - closestZ;
+      const hitRadius = hazard.radius + shipRadius;
+      if (dx * dx + dy * dy + dz * dz <= hitRadius * hitRadius) return true;
+    }
+
+    return false;
+  }
+
   /** Tear down + rebuild the field. Used by tuning panel after editing
    *  ASTEROID_TUNING. Existing trajectory ribbon will refresh next frame. */
   regenerate(seedBase = this.seedBase, tuning?: AsteroidTuningPatch, gravityAnchors?: readonly CourseGravityAnchor[]): void {
@@ -256,6 +323,7 @@ export class AsteroidField {
     if (gravityAnchors) this.gravityAnchors = gravityAnchors;
     if (tuning) Object.assign(ASTEROID_TUNING, tuning);
     this.disposeVisualField();
+    this.disposeVisualHazards();
     for (const a of this.asteroids) {
       this.registry.unregister(a.colliderHandle);
       this.physics.world.removeRigidBody(a.body);
@@ -323,7 +391,7 @@ export class AsteroidField {
     const t = ASTEROID_TUNING;
     if (t.VISUAL_COUNT <= 0) return;
 
-    const geometry = new THREE.IcosahedronGeometry(1, 1);
+    const geometry = buildVisualAsteroidGeometry(this.seedBase + 81200);
     const material = new THREE.MeshStandardMaterial({
       color: 0x655d53,
       roughness: 0.92,
@@ -356,14 +424,22 @@ export class AsteroidField {
         seededNoise(seed + 6) * Math.PI,
       );
       visualQuat.setFromEuler(visualEuler);
-      visualScale.setScalar(radius);
-      visualMatrix.compose(new THREE.Vector3(x, y, z), visualQuat, visualScale);
+      visualPosition.set(x, y, z);
+      visualScale.set(
+        radius * (0.74 + seededNoise(seed + 8) * 0.5),
+        radius * (0.58 + seededNoise(seed + 9) * 0.48),
+        radius * (0.82 + seededNoise(seed + 10) * 0.58),
+      );
+      visualMatrix.compose(visualPosition, visualQuat, visualScale);
       mesh.setMatrixAt(i, visualMatrix);
 
       const densityT = seededNoise(seed + 7);
       visualColor.set(densityT > 0.74 ? 0x3c4149 : densityT > 0.52 ? 0x6f5f4f : 0x5c554d);
       visualColor.lerp(new THREE.Color(0x231f1d), densityT * 0.36);
       mesh.setColorAt(i, visualColor);
+
+      const hitRadius = radius * Math.max(0.62, Math.min(0.92, Math.max(visualScale.x, visualScale.y, visualScale.z) / radius * 0.72));
+      this.visualHazards.push({ x, y, z, radius: hitRadius });
     }
 
     mesh.instanceMatrix.needsUpdate = true;
@@ -371,6 +447,10 @@ export class AsteroidField {
     mesh.computeBoundingSphere();
     this.scene.add(mesh);
     this.visualField = mesh;
+  }
+
+  private disposeVisualHazards(): void {
+    this.visualHazards = [];
   }
 
   private disposeVisualField(): void {
