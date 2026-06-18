@@ -13,13 +13,8 @@ export interface ShipCommand {
   look: { yaw: number; pitch: number };
   // Boost intensity [0, 1]. Multiplies thrust and energy drain.
   boost: number;
-  // Hold-fire weapon trigger.
-  fire: boolean;
   // Edge events (true on the frame they fire, then auto-clear).
   toggleCameraMode: boolean;
-  cycleShipVisual: boolean;
-  toggleHangar: boolean;
-  toggleLock: boolean;
   restartRace: boolean;
   startRace: boolean;
   courseIndex: number | null;
@@ -56,9 +51,6 @@ export class Input {
 
   // Edge-triggered toggle requests, drained on each sample().
   private pendingCameraToggle = false;
-  private pendingShipCycle = false;
-  private pendingHangarToggle = false;
-  private pendingLockToggle = false;
   private pendingRaceRestart = false;
   private pendingRaceStart = false;
   private pendingMenuUp = false;
@@ -80,12 +72,6 @@ export class Input {
       if (isTextInputTarget(e.target)) return;
       // KeyC toggles camera; consume on first press only (no repeat fire).
       if (e.code === 'KeyC' && !e.repeat) this.pendingCameraToggle = true;
-      if (e.code === 'KeyV' && !e.repeat) this.pendingShipCycle = true;
-      if ((e.code === 'Tab' || e.code === 'KeyT' || e.code === 'KeyY') && !e.repeat) {
-        this.pendingHangarToggle = true;
-        if (e.code === 'Tab') e.preventDefault();
-      }
-      if (e.code === 'KeyL' && !e.repeat) this.pendingLockToggle = true;
       if (e.code === 'KeyR' && !e.repeat) this.pendingRaceRestart = true;
       if (e.code === 'Enter' && !e.repeat) this.pendingRaceStart = true;
       if (e.code === 'Escape' && !e.repeat) this.pendingMenuBack = true;
@@ -184,11 +170,7 @@ export class Input {
       rotate: { pitch: 0, yaw: 0, roll: 0 },
       look: { yaw: 0, pitch: 0 },
       boost: 0,
-      fire: false,
       toggleCameraMode: false,
-      cycleShipVisual: false,
-      toggleHangar: false,
-      toggleLock: false,
       restartRace: false,
       startRace: false,
       courseIndex: null,
@@ -241,13 +223,8 @@ export class Input {
       const yPressed = pad.buttons[3]?.pressed ?? false;
       if (yPressed && !this.prevPadButtons[3]) cmd.toggleCameraMode = true;
 
-      // X button: cycle ship visual.
-      const xPressed = pad.buttons[2]?.pressed ?? false;
-      if (xPressed && !this.prevPadButtons[2]) cmd.cycleShipVisual = true;
-
-      // A button (b0): fire weapon (held) and menu confirm on edge.
+      // A button (b0): menu confirm on edge.
       const aPressed = pad.buttons[0]?.pressed ?? false;
-      if (aPressed) cmd.fire = true;
       if (aPressed && !this.prevPadButtons[0]) cmd.startRace = true;
       if (aPressed && !this.prevPadButtons[0]) cmd.menuConfirm = true;
 
@@ -257,12 +234,6 @@ export class Input {
       // Back/Select (b8): restart current run.
       const backPressed = pad.buttons[8]?.pressed ?? false;
       if (backPressed && !this.prevPadButtons[8]) cmd.restartRace = true;
-
-      // R3 click (b11 in standard mapping; some pads expose it as b10):
-      // toggle target lock-on.
-      const r3Pressed = (pad.buttons[11]?.pressed ?? false) || (pad.buttons[10]?.pressed ?? false);
-      const r3Prev = (this.prevPadButtons[11] ?? false) || (this.prevPadButtons[10] ?? false);
-      if (r3Pressed && !r3Prev) cmd.toggleLock = true;
 
       const startPressed = pad.buttons[9]?.pressed ?? false;
       if (startPressed && !this.prevPadButtons[9]) {
@@ -336,9 +307,6 @@ export class Input {
     // Shift = boost (keyboard).
     if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) cmd.boost = 1;
 
-    // F = fire weapon (held).
-    if (this.keys.has('KeyF')) cmd.fire = true;
-
     // Mouse aim (pointer-locked) → ship rotation.
     if (this.pointerLocked) {
       cmd.rotate.yaw   += this.mouseDx * this.mouseSensitivity;
@@ -351,18 +319,6 @@ export class Input {
     if (this.pendingCameraToggle) {
       cmd.toggleCameraMode = true;
       this.pendingCameraToggle = false;
-    }
-    if (this.pendingShipCycle) {
-      cmd.cycleShipVisual = true;
-      this.pendingShipCycle = false;
-    }
-    if (this.pendingHangarToggle) {
-      cmd.toggleHangar = true;
-      this.pendingHangarToggle = false;
-    }
-    if (this.pendingLockToggle) {
-      cmd.toggleLock = true;
-      this.pendingLockToggle = false;
     }
     if (this.pendingRaceRestart) {
       cmd.restartRace = true;

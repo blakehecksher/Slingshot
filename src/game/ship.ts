@@ -5,7 +5,6 @@ import {
   ATTACHMENT_NAMES,
   buildShipVariant,
   SHIP_VARIANTS,
-  SHIP_VISUALS,
   type AttachmentName,
   type BuiltShip,
   type ShipVariantId,
@@ -13,11 +12,7 @@ import {
 } from '../render/shipVisual';
 import {
   COL_ASTEROID,
-  COL_BASE,
   COL_CHECKPOINT,
-  COL_ENEMY,
-  COL_PICKUP,
-  COL_PROJECTILE,
   COL_SHIP,
   interactionGroups,
 } from './collision';
@@ -29,22 +24,16 @@ import type { ShipCommand } from './input';
 // upgrades, weapons, and VFX can mount without knowing the visual origin.
 
 // Re-exports kept for back-compat with callers that expected these names from ship.ts.
-export { SHIP_VARIANTS, SHIP_VISUALS, type ShipVariantId, type AttachmentName };
+export { SHIP_VARIANTS, type ShipVariantId, type AttachmentName };
 
 export interface ShipMods {
   // Multipliers and additions layered onto SHIP_TUNING by upgrades / parts.
   thrustMult: number;
   reverseMult: number;
   agilityMult: number;
-  cargoCapAdd: number;
   energyMaxAdd: number;
   hullHpMax: number;
-  miningCoefAdd: number;
   brakeMult: number;
-  weaponDamage: number;
-  weaponRof: number;
-  weaponMuzzle: number;
-  partMass: number;
 }
 
 export function defaultShipMods(): ShipMods {
@@ -52,15 +41,9 @@ export function defaultShipMods(): ShipMods {
     thrustMult: 1,
     reverseMult: 1,
     agilityMult: 1,
-    cargoCapAdd: 0,
     energyMaxAdd: 0,
     hullHpMax: 100,
-    miningCoefAdd: 0,
     brakeMult: 1,
-    weaponDamage: 0,
-    weaponRof: 0,
-    weaponMuzzle: 0,
-    partMass: 0,
   };
 }
 
@@ -93,8 +76,6 @@ export const SHIP_TUNING = {
 
   // Cargo-fraction sluggishness. 0 = no effect; higher = full-cargo ship feels
   // heavier. Story §6.2: cargo coupling.
-  CARGO_THRUST_PENALTY: 0.4,
-  CARGO_AGILITY_PENALTY: 0.25,
 };
 
 const HULL_HX = 0.75;
@@ -104,8 +85,8 @@ const HULL_VOLUME = (HULL_HX * 2) * (HULL_HY * 2) * (HULL_HZ * 2);
 
 const LINEAR_DAMPING  = 0.0;
 const ANGULAR_DAMPING = 0.0;
-const SHIP_ACTIVE_FILTER = COL_ASTEROID | COL_PICKUP | COL_BASE | COL_PROJECTILE | COL_ENEMY | COL_CHECKPOINT;
-const SHIP_INVULN_FILTER = COL_PICKUP | COL_BASE | COL_CHECKPOINT;
+const SHIP_ACTIVE_FILTER = COL_ASTEROID | COL_CHECKPOINT;
+const SHIP_INVULN_FILTER = COL_CHECKPOINT;
 
 export class Ship {
   readonly body: RAPIER.RigidBody;
@@ -140,13 +121,12 @@ export class Ship {
   private _thrustEnabled = true;
   private _thrustScale = 1;
   private _ambientPull = 0;
-  private _cargoFraction = 0;
   private _hp = 100;
 
   constructor(physics: PhysicsWorld, scene: THREE.Scene) {
     this._physics = physics;
     this._scene = scene;
-    this._variant = SHIP_VISUALS.variant;
+    this._variant = 'scrapper';
     const desc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(0, 0, 0)
       .setLinearDamping(LINEAR_DAMPING)
@@ -180,17 +160,14 @@ export class Ship {
     const r = this.body.rotation();
     this._quat.set(r.x, r.y, r.z, r.w);
 
-    const cargoPenalty = 1 / (1 + this._cargoFraction * SHIP_TUNING.CARGO_THRUST_PENALTY);
-    const cargoAgility = 1 / (1 + this._cargoFraction * SHIP_TUNING.CARGO_AGILITY_PENALTY);
-
     if (this._thrustEnabled) {
       const mass = SHIP_TUNING.MASS;
       const boost = Math.max(0, Math.min(1, cmd.boost ?? 0));
       const boostMult = 1 + boost * (SHIP_TUNING.BOOST_THRUST_MULT - 1);
-      const fwdThrust = SHIP_TUNING.FORWARD_THRUST * SHIP_TUNING.FORWARD_THRUST_BIAS * mass * boostMult * this.mods.thrustMult * cargoPenalty;
-      const revThrust = SHIP_TUNING.REVERSE_THRUST * mass * boostMult * this.mods.reverseMult * cargoPenalty;
+      const fwdThrust = SHIP_TUNING.FORWARD_THRUST * SHIP_TUNING.FORWARD_THRUST_BIAS * mass * boostMult * this.mods.thrustMult;
+      const revThrust = SHIP_TUNING.REVERSE_THRUST * mass * boostMult * this.mods.reverseMult;
       const forwardScale = cmd.thrust.z < 0 ? fwdThrust : revThrust;
-      const strafe = SHIP_TUNING.STRAFE_THRUST * mass * boostMult * this.mods.thrustMult * cargoPenalty;
+      const strafe = SHIP_TUNING.STRAFE_THRUST * mass * boostMult * this.mods.thrustMult;
       this._force.set(
         cmd.thrust.x * strafe,
         cmd.thrust.y * strafe,
@@ -211,7 +188,7 @@ export class Ship {
       this.clearThrustVisuals();
     }
 
-    const ag = this.mods.agilityMult * cargoAgility;
+    const ag = this.mods.agilityMult;
     this._localAxis.set(
       cmd.rotate.pitch * SHIP_TUNING.MAX_PITCH_RATE * ag,
       cmd.rotate.yaw * SHIP_TUNING.MAX_YAW_RATE * ag,
@@ -239,21 +216,6 @@ export class Ship {
     this.syncMeshFromBody();
   }
 
-  setVariant(variant: ShipVariantId): void {
-    if (variant === this._variant) return;
-    this._variant = variant;
-    SHIP_VISUALS.variant = variant;
-    this.setVisual(buildShipVariant(variant));
-  }
-
-  cycleVariant(direction = 1): ShipVariantId {
-    const ids = Object.keys(SHIP_VARIANTS) as ShipVariantId[];
-    const i = ids.indexOf(this._variant);
-    const next = ids[(i + direction + ids.length) % ids.length];
-    this.setVariant(next);
-    return next;
-  }
-
   setMods(mods: ShipMods): void {
     this.mods = mods;
     if (this._hp > mods.hullHpMax) this._hp = mods.hullHpMax;
@@ -275,12 +237,6 @@ export class Ship {
   get hpFraction(): number { return this.mods.hullHpMax > 0 ? this._hp / this.mods.hullHpMax : 0; }
 
   /** Cargo fraction of cap [0..1]. Drives sluggishness + audio cargo hum. */
-  setCargoFraction(f: number): void {
-    this._cargoFraction = Math.max(0, Math.min(1, f));
-  }
-
-  get cargoFraction(): number { return this._cargoFraction; }
-
   /** Iterate over Object3D attachment points by canonical name. Useful for
    *  upgrade-mount loops without naming each slot. */
   forEachAttachment(fn: (name: AttachmentName, node: THREE.Object3D) => void): void {

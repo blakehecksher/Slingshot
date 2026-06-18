@@ -10,6 +10,7 @@ interface GateHandle {
   readonly group: THREE.Group;
   readonly visuals: THREE.Mesh[];
   readonly light: THREE.PointLight;
+  readonly portal: THREE.Mesh | null;
 }
 
 const ACTIVE_MAT = new THREE.MeshBasicMaterial({
@@ -122,6 +123,13 @@ export class CheckpointSystem {
       }
       const pulse = 0.7 + Math.sin(this.spin * 4 + i) * 0.18;
       h.light.intensity = i === nextCheckpoint ? 26 * pulse : i === nextCheckpoint + 1 ? 9 * pulse : 2;
+      if (h.portal) {
+        const mat = h.portal.material as THREE.MeshBasicMaterial;
+        const breathe = 0.5 + Math.sin(this.spin * 2.2) * 0.5;
+        mat.opacity = i === nextCheckpoint ? 0.05 + breathe * 0.07
+          : i === nextCheckpoint + 1 ? 0.02
+          : 0;
+      }
     }
   }
 
@@ -140,6 +148,26 @@ export class CheckpointSystem {
     }
 
     const visuals: THREE.Mesh[] = [];
+    let portal: THREE.Mesh | null = null;
+    if (gate.kind === 'ring') {
+      // A faint holographic membrane filling the ring. Near-invisible when the
+      // gate is dormant; the active gate's is pulsed bright in update() so the
+      // target lane reads as a portal to fly through, not just a hoop.
+      const disc = new THREE.Mesh(
+        new THREE.CircleGeometry(gate.radius * 0.94, 48),
+        new THREE.MeshBasicMaterial({
+          color: 0x5dff9a,
+          transparent: true,
+          opacity: 0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          toneMapped: false,
+        }),
+      );
+      group.add(disc);
+      portal = disc;
+    }
     if (gate.kind === 'asteroid') {
       const ringRadius = Math.max((gate.asteroidRadius ?? 0) + 8, gate.radius);
       const ringA = new THREE.Mesh(new THREE.TorusGeometry(ringRadius, 2.4, 8, 96), WAITING_MAT);
@@ -183,6 +211,7 @@ export class CheckpointSystem {
       group,
       visuals,
       light,
+      portal,
     });
   }
 

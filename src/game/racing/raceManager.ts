@@ -1,6 +1,7 @@
 import type { RaceCourse } from './courses';
 
-export type RaceState = 'select' | 'countdown' | 'racing' | 'finished' | 'invalid';
+export type RaceState = 'select' | 'countdown' | 'ready' | 'racing' | 'finished' | 'invalid';
+export type RaceStartMode = 'countdown' | 'ready';
 
 export interface RaceFinish {
   readonly courseId: string;
@@ -18,18 +19,18 @@ export class RaceManager {
   invalidReason = '';
   finish: RaceFinish | null = null;
 
-  start(course: RaceCourse): void {
+  start(course: RaceCourse, mode: RaceStartMode = 'countdown'): void {
     this.course = course;
-    this.state = 'countdown';
+    this.state = mode;
     this.elapsedSec = 0;
-    this.countdownSec = 3;
+    this.countdownSec = mode === 'countdown' ? 3 : 0;
     this.nextCheckpoint = 0;
     this.splits = [];
     this.invalidReason = '';
     this.finish = null;
   }
 
-  update(dt: number): { started: boolean } {
+  update(dt: number, launchRequested = false): { started: boolean } {
     if (this.state === 'countdown') {
       this.countdownSec -= dt;
       if (this.countdownSec <= 0) {
@@ -37,6 +38,9 @@ export class RaceManager {
         this.state = 'racing';
         return { started: true };
       }
+    } else if (this.state === 'ready' && launchRequested) {
+      this.state = 'racing';
+      return { started: true };
     } else if (this.state === 'racing') {
       this.elapsedSec += dt;
     }
@@ -89,4 +93,3 @@ export function formatDelta(sec: number): string {
   const sign = sec <= 0 ? '-' : '+';
   return `${sign}${Math.abs(sec).toFixed(3)}`;
 }
-

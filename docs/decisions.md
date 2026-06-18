@@ -203,3 +203,33 @@ Supersedes: none
 Decision: Remove the persistent in-race minimap from the active racing build and product spec. Keep trajectory prediction available for debug/tuning and any lower-cost in-world guidance, but do not treat a separate minimap render as core HUD.
 Reason: The minimap adds an extra render pass and HUD complexity while providing limited function in the current gate-racing loop. Gates, ghosts, the course guide line, field feedback, and optional debug trajectory cues carry the useful navigation/readability work with less runtime and visual cost.
 Supersedes: minimap-as-core guidance in active spec and earlier minimap-specific implementation notes.
+
+## 2026-06-07 2156 - Recovery cleanup removes legacy active systems
+
+Decision: Treat the active build as a focused asteroid time-trial racing fork. Remove mining, economy/cargo, hangar/upgrades, weapons/combat/enemies, pickups, Friend Heat, draft ship binaries, and ship-builder support from the active source path. Keep one procedural racing ship, course board, race loop, asteroid fields, gates, crash/restart, results, settings, local records/ghosts, and optional shared leaderboard support.
+Reason: The broad prototype systems were no longer serving the current racing loop and kept directing future work toward inactive mechanics. The cleanup makes asteroid trust and course racing the primary code path.
+Supersedes: Friend Heat active implementation notes and prior hangar/economy/combat prototype direction for this branch.
+
+## 2026-06-18 0010 - Retries launch on thrust without another countdown
+
+Decision: Keep the three-second countdown for fresh course-board launches. Manual restart, results Retry, crash recovery, and out-of-bounds recovery reset the full run at the start gate, then wait in a frozen ready state until the first meaningful thrust input starts the timer and ship.
+Reason: Time-trial practice involves frequent repetition. Removing the repeated countdown shortens the retry loop while preserving a clear initial launch and clean-run leaderboard rules.
+Supersedes: fresh countdown after every crash/restart in the active implementation.
+
+## 2026-06-18 0010 - Asteroids use ordinary, weak, and strong gravity classes
+
+Decision: Classify gameplay asteroids as ordinary, weak Dead Iron, or strong Dead Iron. Ordinary rocks collide but exert no gravity; weak rocks exert reduced pull; strong rocks use full tuned pull. Authored gravity anchors are always strong, and each class must have distinct material and seam language.
+Reason: The player must be able to read which rocks shape the racing line before relying on HUD/audio warnings. A three-level hierarchy preserves field density while making gravity legible.
+Supersedes: every gameplay asteroid acting as a full gravity source.
+
+## 2026-06-18 0010 - Defensive race recovery preserves clean-run timing
+
+Decision: Automatically pause active attempts when the tab becomes hidden or a controller disconnects. Treat leaving the computed course envelope as a warned course loss that resets the whole attempt into the thrust-to-launch ready state.
+Reason: Lost focus, lost input, and flying irrecoverably away should resolve clearly without introducing checkpoint penalties, teleports inside ranked ghosts, or ambiguous partial runs.
+Supersedes: no explicit controller-disconnect pause and no active out-of-bounds recovery.
+
+## 2026-06-18 0010 - Strong-well passes receive distinct release feedback
+
+Decision: Strong wells drive a restrained screen treatment while under pull. Exiting a strong-well pass with meaningful speed gain triggers a dedicated whoosh, short visual pulse, and speed-gain callout.
+Reason: The gravity assist is the central reward event and should feel different from ordinary speed, boost, or generic proximity danger.
+Supersedes: none.

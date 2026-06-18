@@ -11,17 +11,46 @@ const EPSILON = 0.0001;
 
 export class CourseGuideLine {
   private line: THREE.Line;
+  private material: THREE.ShaderMaterial;
 
   constructor(scene: THREE.Scene) {
-    const material = new THREE.LineBasicMaterial({
-      color: 0x56e0c7,
+    // Flowing energy ribbon: a dash pattern scrolls along the racing line
+    // toward the next gate, giving the player a living "this way" cue instead
+    // of a static thread. Additive + bloom makes it glow.
+    this.material = new THREE.ShaderMaterial({
       transparent: true,
-      opacity: 0.24,
       depthWrite: false,
       depthTest: true,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uTime: { value: 0 },
+        uColor: { value: new THREE.Color(0x56e0c7) },
+        uBase: { value: 0.16 },
+      },
+      vertexShader: /* glsl */ `
+        attribute float aProgress;
+        varying float vProgress;
+        void main() {
+          vProgress = aProgress;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uTime;
+        uniform vec3 uColor;
+        uniform float uBase;
+        varying float vProgress;
+        void main() {
+          // Repeating pulses sliding forward along the route.
+          float flow = fract(vProgress * 26.0 - uTime * 0.9);
+          float pulse = smoothstep(0.0, 0.12, flow) * smoothstep(1.0, 0.55, flow);
+          float alpha = uBase + pulse * 0.7;
+          gl_FragColor = vec4(uColor * (0.7 + pulse * 1.6), alpha);
+        }
+      `,
     });
 
-    this.line = new THREE.Line(new THREE.BufferGeometry(), material);
+    this.line = new THREE.Line(new THREE.BufferGeometry(), this.material);
     this.line.frustumCulled = false;
     this.line.renderOrder = 1;
     scene.add(this.line);
@@ -39,9 +68,18 @@ export class CourseGuideLine {
     const sampled = curve.getPoints(sampleCount);
     const geometry = new THREE.BufferGeometry().setFromPoints(sampled);
 
+    // Per-vertex arc fraction (0 at start, 1 at finish) drives the flow.
+    const progress = new Float32Array(sampled.length);
+    for (let i = 0; i < sampled.length; i++) progress[i] = i / (sampled.length - 1);
+    geometry.setAttribute('aProgress', new THREE.BufferAttribute(progress, 1));
+
     this.line.geometry.dispose();
     this.line.geometry = geometry;
     this.line.geometry.computeBoundingSphere();
+  }
+
+  update(dt: number): void {
+    this.material.uniforms.uTime.value += dt;
   }
 
   setVisible(visible: boolean): void {

@@ -2,32 +2,26 @@ import * as THREE from 'three';
 import { ASTEROID_TUNING, AsteroidField } from './game/asteroids';
 import { ContactRegistry } from './game/collision';
 import { Energy } from './game/energy';
-import { FEEDBACK_TUNING, GravityFeedback } from './game/feedback';
+import { FEEDBACK_TUNING, GravityFeedback, SlingshotFeedbackDetector } from './game/feedback';
 import { GRAVITY_TUNING, sampleGravityAt } from './game/gravity';
 import { Input, isTextInputTarget, type ShipCommand } from './game/input';
 import { Lifecycle, LIFECYCLE_TUNING } from './game/lifecycle';
-import { PICKUP_TUNING, PickupSystem } from './game/pickups';
 import { Ship, SHIP_TUNING } from './game/ship';
 import { predictTrajectory, type Trajectory } from './game/trajectory';
-import { computeModsFromParts, defaultManifest } from './game/upgrades';
 import { CheckpointSystem } from './game/racing/checkpoints';
 import { RACE_ASTEROID_DEFAULTS, RACE_COURSES, type RaceCourse } from './game/racing/courses';
-import {
-  createFriendHeatClient,
-  formatHeatRemaining,
-  type FriendHeatSnapshot,
-} from './game/racing/friendHeat';
 import { GhostRecorder, GhostReplay } from './game/racing/ghost';
 import { createLeaderboardProvider, type CourseRecord, type RaceLeaderboardEntry } from './game/racing/leaderboard';
 import { formatDelta, formatRaceTime, RaceManager } from './game/racing/raceManager';
-import { zoneFor, zoneLabel, type FieldZone } from './game/zones';
+import { CourseBoundary } from './game/racing/courseBoundary';
 import { initPhysics, PhysicsWorld } from './physics/world';
 import { GameAudio } from './audio/audio';
 import { TuningPanel } from './debug/tuningPanel';
+import { DebugViz } from './debug/debugViz';
+import { applyTuning, loadSavedTuning, snapshotTuning } from './debug/tuningStore';
 import { CourseGuideLine } from './render/courseGuideLine';
 import { SpaceDust } from './render/dust';
 import { createRenderRig } from './render/scene';
-import { resolveShipVisual } from './render/shipVisual';
 import { TrajectoryRibbon } from './render/trajectory';
 import { THEME_CSS } from './render/theme';
 
@@ -44,7 +38,6 @@ await initPhysics();
 
 const FIXED_DT = 1 / 120;
 const MAX_STEPS_PER_FRAME = 8;
-const BASE_POS = new THREE.Vector3(0, 0, 0);
 const UI_SETTINGS_KEY = 'slingshot.uiSettings.v1';
 const BASE_SHAKE_AMP = FEEDBACK_TUNING.SHAKE_AMP;
 const BASE_HAPTIC_MIN = FEEDBACK_TUNING.HAPTIC_MIN;
@@ -64,18 +57,16 @@ Object.assign(SHIP_TUNING, {
   SPEED_ASSIST_PULL_SUPPRESS_LO: 0.7,
   SPEED_ASSIST_PULL_SUPPRESS_HI: 7.0,
 });
-PICKUP_TUNING.ENERGY_PICKUP_COUNT = 0;
+
+// Capture the in-source defaults as the recovery baseline BEFORE any saved
+// developer overrides load on top. "Reset to baseline" in the tuning panel
+// returns here; saved tweaks (localStorage) win at boot but never overwrite it.
+const CODE_BASELINE = snapshotTuning();
+const savedTuning = loadSavedTuning();
+if (savedTuning) applyTuning(savedTuning);
 
 const leaderboard = createLeaderboardProvider();
 const racingSave = await leaderboard.load();
-const friendHeat = createFriendHeatClient(leaderboard.getPlayerName());
-let friendHeatSnapshot: FriendHeatSnapshot | null = friendHeat?.current ?? null;
-const HEAT_DURATION_OPTIONS = [180, 300, 600, 900] as const;
-let friendHeatDurationIndex = 1;
-let friendJoinCodeInput = '';
-let friendBusy = false;
-let friendStatusMessage = '';
-let raceIsHeatAttempt = false;
 let selectedCourseIndex = Math.max(0, RACE_COURSES.findIndex((c) => c.id === racingSave.selectedCourseId));
 if (selectedCourseIndex < 0) selectedCourseIndex = 0;
 let selectedCourse = RACE_COURSES[selectedCourseIndex];
@@ -88,20 +79,23 @@ window.addEventListener('pointerdown', unlockAudio);
 window.addEventListener('keydown', unlockAudio);
 window.addEventListener('gamepadconnected', unlockAudio);
 
-const { composer, scene, camera, skybox } = createRenderRig(canvas);
+const { renderer, composer, postfx, scene, camera, skybox } = createRenderRig(canvas);
+const BASE_FOV = camera.fov;
+const SPEED_FOV_REF = 360; // speed at which the FOV punch saturates
 const physics = new PhysicsWorld(FIXED_DT);
 const input = new Input(canvas);
 const registry = new ContactRegistry();
 const ship = new Ship(physics, scene);
 const dust = new SpaceDust(scene);
-const asteroidField = new AsteroidField(scene, physics, registry, selectedCourse.seed, selectedCourse.field.gravityAnchors ?? []);
+const asteroidField = new AsteroidField(scene, physics, registry, selectedCourse);
 const courseGuideLine = new CourseGuideLine(scene);
 const trajectoryRibbon = new TrajectoryRibbon(scene);
 const feedback = new GravityFeedback();
+const slingshotFeedback = new SlingshotFeedbackDetector();
 const energy = new Energy();
-const pickups = new PickupSystem(scene, physics, registry);
 const checkpoints = new CheckpointSystem(scene);
 const race = new RaceManager();
+const courseBoundary = new CourseBoundary(selectedCourse);
 const ghostRecorder = new GhostRecorder();
 const topGhostReplay = new GhostReplay(scene, { color: 0x6dd6ff });
 const personalGhostReplay = new GhostReplay(scene, { color: 0xff9b32 });
@@ -109,8 +103,6 @@ const personalGhostReplay = new GhostReplay(scene, { color: 0xff9b32 });
 checkpoints.setCourse(selectedCourse);
 ship.teleport(selectedCourse.startPosition);
 ship.setFrozen(true);
-ship.setMods(computeModsFromParts(defaultManifest().parts));
-void resolveAndSwapShipVisual();
 
 const lifecycle = new Lifecycle(ship, selectedCourse.startPosition, {
   onDeath: () => {
@@ -135,17 +127,24 @@ const lifecycle = new Lifecycle(ship, selectedCourse.startPosition, {
     hasPrevVelocity = false;
     if (crashAutoRestartPending) {
       crashAutoRestartPending = false;
-      startRace();
+      startRace('retry');
     }
   },
+});
+
+const debugViz = new DebugViz({
+  scene,
+  field: asteroidField,
+  getShipPosition: () => ship.position,
 });
 
 const tuningPanel = new TuningPanel({
   ship,
   field: asteroidField,
-  pickups,
   audio,
   spawnPos: selectedCourse.startPosition,
+  baseline: CODE_BASELINE,
+  debugViz,
   onToast: (msg, dur) => showToast(msg, dur),
 });
 tuningPanel.toggle();
@@ -164,7 +163,6 @@ let lookYaw = 0;
 let lookPitch = 0;
 let trajectory: Trajectory = predictTrajectory(ship.position, ship.linearVelocity, asteroidField.asteroids);
 let gravitySample = sampleGravityAt(selectedCourse.startPosition, asteroidField.asteroids);
-let currentZone: FieldZone = 'open';
 let peakSpeed = 0;
 let accelMag = 0;
 let hasPrevVelocity = false;
@@ -179,8 +177,10 @@ let audioThrustDemand = 0;
 let audioBoost = 0;
 let tutorialTipKeysShown = new Set<string>();
 let countdownCue = 0;
+let outOfBoundsRemaining: number | null = null;
+let outOfBoundsWarningShown = false;
 
-type AppScene = 'title' | 'course' | 'race' | 'pause' | 'invalid' | 'results' | 'settings' | 'field-notes' | 'friend-entry' | 'friend-lobby' | 'friend-results';
+type AppScene = 'title' | 'course' | 'race' | 'pause' | 'results' | 'settings';
 
 interface UiSettings {
   stickSensitivity: number;
@@ -231,16 +231,11 @@ let menuMessage = 'Field terminal ready.';
 let titleActionIndex = 0;
 let courseActionIndex = 0;
 let resultsActionIndex = 0;
-let invalidActionIndex = 0;
 let pauseActionIndex = 0;
 let settingsFocusIndex = 0;
 let settingsScrollTop = 0;
 let settingsShouldScrollFocus = false;
-let fieldNotesActionIndex = 0;
 let crashAutoRestartPending = false;
-let friendEntryFocusIndex = 0;
-let friendLobbyFocusIndex = 0;
-let friendResultsActionIndex = 0;
 
 function loadUiSettings(): UiSettings {
   try {
@@ -274,6 +269,20 @@ function applyUiSettings(): void {
   personalGhostReplay.setOpacity(settings.ghostOpacity);
   FEEDBACK_TUNING.SHAKE_AMP = BASE_SHAKE_AMP * settings.cameraShake * (settings.reducedMotion ? 0.35 : 1);
   FEEDBACK_TUNING.HAPTIC_MIN = settings.rumble <= 0 ? 99 : BASE_HAPTIC_MIN / Math.max(0.25, settings.rumble);
+  applyGraphicsQuality();
+}
+
+// Quality tiers trade resolution + discretionary post passes. Low caps the
+// pixel ratio and drops SMAA/grain; high renders at full device ratio.
+function applyGraphicsQuality(): void {
+  const dpr = window.devicePixelRatio;
+  const ratio = settings.graphicsQuality === 'low' ? 1
+    : settings.graphicsQuality === 'high' ? Math.min(dpr, 2)
+    : Math.min(dpr, 1.5);
+  renderer.setPixelRatio(ratio);
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  postfx.setSize(window.innerWidth, window.innerHeight, ratio);
+  postfx.setQuality(settings.graphicsQuality);
 }
 
 const shipQuat = new THREE.Quaternion();
@@ -337,26 +346,21 @@ function applyCourseAsteroids(course: RaceCourse): void {
   Object.assign(ASTEROID_TUNING, RACE_ASTEROID_DEFAULTS, course.asteroidTuning);
 }
 
-async function resolveAndSwapShipVisual(): Promise<void> {
-  try {
-    const built = await resolveShipVisual({ variant: ship.variant, manifest: defaultManifest() });
-    ship.setVisual(built);
-  } catch (err) {
-    console.warn('[ship] visual resolve failed', err);
-  }
-}
-
 function prepareCourse(course: RaceCourse): void {
   selectedCourse = course;
+  courseBoundary.setCourse(course);
+  slingshotFeedback.reset();
+  outOfBoundsRemaining = null;
+  outOfBoundsWarningShown = false;
   applyCourseAsteroids(course);
-  asteroidField.regenerate(course.seed, undefined, course.field.gravityAnchors ?? []);
+  asteroidField.regenerate(course);
   courseGuideLine.setCourse(course);
   checkpoints.setCourse(course);
   const refreshSeq = ++leaderboardRefreshSeq;
   void leaderboard.setSelectedCourse(course.id).then(() => {
     if (refreshSeq !== leaderboardRefreshSeq || selectedCourse.id !== course.id) return;
     syncGhostRuns(course.id);
-    if (race.state !== 'racing' && race.state !== 'countdown') {
+    if (race.state !== 'racing' && race.state !== 'countdown' && race.state !== 'ready') {
       renderAppScene(finishMessage || menuMessage);
     }
   });
@@ -371,13 +375,12 @@ function prepareCourse(course: RaceCourse): void {
   hasPrevVelocity = false;
   lookYaw = 0;
   lookPitch = 0;
-  currentZone = 'open';
   gravitySample = sampleGravityAt(course.startPosition, asteroidField.asteroids);
   syncGhostRuns(course.id);
 }
 
 function selectCourse(index: number): void {
-  if (race.state === 'racing' || race.state === 'countdown') return;
+  if (race.state === 'racing' || race.state === 'countdown' || race.state === 'ready') return;
   selectedCourseIndex = (index + RACE_COURSES.length) % RACE_COURSES.length;
   prepareCourse(RACE_COURSES[selectedCourseIndex]);
   race.returnToSelect();
@@ -386,27 +389,16 @@ function selectCourse(index: number): void {
   renderAppScene(menuMessage);
 }
 
-function startRace(): void {
-  raceIsHeatAttempt = false;
-  beginRace();
+function startRace(mode: 'fresh' | 'retry' = 'fresh'): void {
+  beginRace(mode);
 }
 
-function startHeatAttempt(): void {
-  if (!friendHeat?.canStartAttempt()) {
-    friendStatusMessage = 'Heat timer expired - no new attempts.';
-    renderAppScene();
-    return;
-  }
-  raceIsHeatAttempt = true;
-  beginRace();
-}
-
-function beginRace(): void {
+function beginRace(mode: 'fresh' | 'retry'): void {
   // A manual restart during the post-crash fade would otherwise let the queued
   // auto-restart fire a second countdown on top of this one.
   crashAutoRestartPending = false;
   prepareCourse(selectedCourse);
-  race.start(selectedCourse);
+  race.start(selectedCourse, mode === 'fresh' ? 'countdown' : 'ready');
   goOverlayTimer = 0;
   countdownCue = 4;
   tutorialTipKeysShown = new Set<string>();
@@ -415,8 +407,10 @@ function beginRace(): void {
   coursePanel.style.display = 'none';
   appScene = 'race';
   audio.setMusicState('race');
-  audio.raceStart();
-  showToast(raceIsHeatAttempt ? 'HEAT ATTEMPT' : selectedCourse.lore?.launchCallout ?? tutorialStandbyText(), 1300);
+  if (mode === 'fresh') {
+    audio.raceStart();
+    showToast(selectedCourse.lore?.launchCallout ?? tutorialStandbyText(), 1300);
+  }
 }
 
 function tutorialStandbyText(): string {
@@ -466,84 +460,22 @@ async function finishRace(): Promise<void> {
     : result.remoteError
       ? ` - leaderboard update failed: ${shortError(result.remoteError)}`
       : '';
-  let heatNote = '';
-  const heatAttempt = raceIsHeatAttempt;
-  if (heatAttempt && friendHeat?.current) {
-    try {
-      await friendHeat.submitRun(run);
-      const snap = friendHeat.current;
-      if (snap?.lobbyBest && Math.abs(snap.lobbyBest.timeSec - finish.timeSec) < 0.0005) {
-        heatNote = ' - lobby best';
-      } else {
-        heatNote = ' - heat run submitted';
-      }
-    } catch (err) {
-      heatNote = ` - heat submit failed: ${shortError(err instanceof Error ? err.message : String(err))}`;
-    }
-  }
   if (result.isPersonalBest) audio.personalBestTone();
   else audio.finishTone();
   const courseNote = selectedCourse.lore?.resultNote ? ` - ${selectedCourse.lore.resultNote}` : '';
-  finishMessage = `Finish ${formatRaceTime(finish.timeSec)}${result.isPersonalBest ? ' - best run' : ` (${formatDelta(delta)} vs best)`}${remote}${heatNote}${courseNote}`;
-  raceIsHeatAttempt = false;
+  finishMessage = `Finish ${formatRaceTime(finish.timeSec)}${result.isPersonalBest ? ' - best run' : ` (${formatDelta(delta)} vs best)`}${remote}${courseNote}`;
   syncGhostRuns(finish.courseId);
   showToast(finishMessage, 3000);
   appScene = 'results';
   input.releasePointerLock();
   resultsActionIndex = 0;
   renderAppScene(finishMessage, result.record);
-  if (heatAttempt && friendHeat?.current) {
-    void friendHeat.refresh();
-  }
 }
 
 function syncGhostRuns(courseId: string): void {
-  const heat = friendHeatSnapshot;
-  if (heat && heat.lobby.status === 'active' && heat.lobby.courseId === courseId) {
-    topGhostReplay.setRun(heat.lobbyBestGhost);
-    personalGhostReplay.setRun(null);
-    return;
-  }
   topGhostReplay.setRun(leaderboard.getTopRecord(courseId)?.bestGhost ?? null);
   personalGhostReplay.setRun(leaderboard.getRecord(courseId)?.bestGhost ?? null);
 }
-
-function isFriendHeatScene(scene: AppScene): boolean {
-  return scene === 'friend-entry' || scene === 'friend-lobby' || scene === 'friend-results';
-}
-
-function selectCourseById(courseId: string): void {
-  const idx = RACE_COURSES.findIndex((c) => c.id === courseId);
-  if (idx < 0 || idx === selectedCourseIndex) return;
-  if (race.state === 'racing' || race.state === 'countdown') return;
-  selectedCourseIndex = idx;
-  prepareCourse(RACE_COURSES[idx]);
-}
-
-friendHeat?.subscribe((snap) => {
-  const prevId = friendHeatSnapshot?.lobby.id ?? null;
-  const prevStatus = friendHeatSnapshot?.lobby.status ?? null;
-  const prevBestId = friendHeatSnapshot?.lobbyBest?.id ?? null;
-  friendHeatSnapshot = snap;
-  if (snap) {
-    if (selectedCourse.id !== snap.lobby.courseId) selectCourseById(snap.lobby.courseId);
-    if (snap.lobby.status === 'active' && prevStatus !== 'active' && appScene === 'friend-lobby') {
-      friendStatusMessage = 'Heat is live. Start your run when ready.';
-    }
-    if (snap.lobby.status === 'closed' && appScene === 'friend-lobby') {
-      friendStatusMessage = 'Heat closed.';
-    }
-  } else if (prevId) {
-    if (isFriendHeatScene(appScene)) setAppScene('title', 'Heat ended.');
-  }
-  if (!raceIsHeatAttempt && race.state !== 'racing' && race.state !== 'countdown') {
-    syncGhostRuns(selectedCourse.id);
-  }
-  if (isFriendHeatScene(appScene)) renderAppScene();
-  if (prevBestId !== (snap?.lobbyBest?.id ?? null) && snap?.lobbyBest) {
-    showToast(`LOBBY BEST ${formatRaceTime(snap.lobbyBest.timeSec)} - ${snap.lobbyBest.playerName}`, 1600);
-  }
-});
 
 function applyCameraToggle(): void {
   cameraMode = cameraMode === 'chase' ? 'cockpit' : 'chase';
@@ -566,7 +498,7 @@ function setAppScene(scene: AppScene, message = menuMessage): void {
   // Any non-cockpit scene is an HTML menu — free the cursor so it's clickable
   // and stop the (frozen) ship from banking stale mouse input.
   input.releasePointerLock();
-  if (scene === 'results' || scene === 'invalid') audio.setMusicState('results');
+  if (scene === 'results') audio.setMusicState('results');
   else audio.setMusicState('menu');
   renderAppScene(message);
 }
@@ -578,14 +510,21 @@ function resumeRace(): void {
   showToast('RESUME', 500);
 }
 
-function pauseRace(): void {
-  if (race.state !== 'racing' && race.state !== 'countdown') return;
+function pauseRace(message = 'Run paused.'): void {
+  if (race.state !== 'racing' && race.state !== 'countdown' && race.state !== 'ready') return;
   pauseActionIndex = 0;
-  setAppScene('pause', 'Run paused.');
+  setAppScene('pause', message);
   audio.silence();
   audio.pauseTone();
   audio.setMusicState('menu');
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && appScene === 'race') pauseRace('Run paused — tab hidden.');
+});
+window.addEventListener('gamepaddisconnected', () => {
+  if (appScene === 'race') pauseRace('Controller disconnected. Reconnect or use keyboard.');
+});
 
 function isSceneHoldingPhysics(): boolean {
   return appScene === 'pause' || (appScene === 'settings' && previousMenuScene === 'pause');
@@ -605,7 +544,7 @@ function handleAppInput(cmd: ShipCommand): void {
 
   if (cmd.restartRace && (appScene === 'race' || appScene === 'pause')) {
     audio.menuConfirm();
-    startRace();
+    startRace('retry');
     return;
   }
 
@@ -628,11 +567,6 @@ function handleAppInput(cmd: ShipCommand): void {
     return;
   }
 
-  if (appScene === 'field-notes') {
-    handleFieldNotesInput(cmd);
-    return;
-  }
-
   if (appScene === 'title') {
     handleTitleInput(cmd);
     return;
@@ -648,40 +582,18 @@ function handleAppInput(cmd: ShipCommand): void {
     return;
   }
 
-  if (appScene === 'invalid') {
-    handleInvalidInput(cmd);
-    return;
-  }
-
-  if (appScene === 'friend-entry') {
-    handleFriendEntryInput(cmd);
-    return;
-  }
-
-  if (appScene === 'friend-lobby') {
-    handleFriendLobbyInput(cmd);
-    return;
-  }
-
-  if (appScene === 'friend-results') {
-    handleFriendResultsInput(cmd);
-    return;
-  }
-
 }
 
 function handleTitleInput(cmd: ShipCommand): void {
   if (cmd.menuUp) selectCourse(selectedCourseIndex - 1);
   if (cmd.menuDown) selectCourse(selectedCourseIndex + 1);
-  if (cmd.menuLeft) titleActionIndex = wrapIndex(titleActionIndex - 1, 4);
-  if (cmd.menuRight) titleActionIndex = wrapIndex(titleActionIndex + 1, 4);
+  if (cmd.menuLeft) titleActionIndex = wrapIndex(titleActionIndex - 1, 2);
+  if (cmd.menuRight) titleActionIndex = wrapIndex(titleActionIndex + 1, 2);
   if (!cmd.menuConfirm && !cmd.startRace) {
     if (cmd.menuLeft || cmd.menuRight) renderAppScene();
     return;
   }
   if (titleActionIndex === 0) startRace();
-  else if (titleActionIndex === 1) openFriendHeatEntry();
-  else if (titleActionIndex === 2) openFieldNotes('title');
   else {
     previousMenuScene = 'title';
     setAppScene('settings', 'Tune controls and readability.');
@@ -691,16 +603,14 @@ function handleTitleInput(cmd: ShipCommand): void {
 function handleCourseInput(cmd: ShipCommand): void {
   if (cmd.menuUp) selectCourse(selectedCourseIndex - 1);
   if (cmd.menuDown) selectCourse(selectedCourseIndex + 1);
-  if (cmd.menuLeft) courseActionIndex = wrapIndex(courseActionIndex - 1, 4);
-  if (cmd.menuRight) courseActionIndex = wrapIndex(courseActionIndex + 1, 4);
+  if (cmd.menuLeft) courseActionIndex = wrapIndex(courseActionIndex - 1, 2);
+  if (cmd.menuRight) courseActionIndex = wrapIndex(courseActionIndex + 1, 2);
   if (cmd.menuBack) {
     setAppScene('title', 'Field terminal ready.');
     return;
   }
   if (cmd.menuConfirm || cmd.startRace) {
     if (courseActionIndex === 0) startRace();
-    else if (courseActionIndex === 1) openFriendHeatEntry();
-    else if (courseActionIndex === 2) openFieldNotes('course');
     else {
       previousMenuScene = 'course';
       setAppScene('settings', 'Tune controls and readability.');
@@ -708,44 +618,6 @@ function handleCourseInput(cmd: ShipCommand): void {
     return;
   }
   if (cmd.menuLeft || cmd.menuRight) renderAppScene();
-}
-
-function openFieldNotes(from: AppScene): void {
-  previousMenuScene = from === 'title' ? 'title' : 'course';
-  fieldNotesActionIndex = 0;
-  setAppScene('field-notes', 'Field notes open.');
-}
-
-function handleFieldNotesInput(cmd: ShipCommand): void {
-  if (cmd.menuUp) selectCourse(selectedCourseIndex - 1);
-  if (cmd.menuDown) selectCourse(selectedCourseIndex + 1);
-  if (cmd.menuLeft) fieldNotesActionIndex = wrapIndex(fieldNotesActionIndex - 1, 2);
-  if (cmd.menuRight) fieldNotesActionIndex = wrapIndex(fieldNotesActionIndex + 1, 2);
-  if (cmd.menuBack) {
-    setAppScene(previousMenuScene === 'title' ? 'title' : 'course', 'Course board ready.');
-    return;
-  }
-  if (!cmd.menuConfirm && !cmd.startRace) {
-    if (cmd.menuLeft || cmd.menuRight) renderAppScene();
-    return;
-  }
-  if (fieldNotesActionIndex === 0) startRace();
-  else setAppScene(previousMenuScene === 'title' ? 'title' : 'course', 'Course board ready.');
-}
-
-function openFriendHeatEntry(): void {
-  if (!friendHeat) {
-    showToast('Friend Heat needs Supabase config', 1800);
-    return;
-  }
-  friendStatusMessage = '';
-  if (friendHeat.current) {
-    setAppScene('friend-lobby', 'Lobby restored.');
-    return;
-  }
-  friendEntryFocusIndex = 0;
-  friendJoinCodeInput = '';
-  setAppScene('friend-entry', 'Private invite-code heat.');
 }
 
 function handlePauseInput(cmd: ShipCommand): void {
@@ -760,7 +632,7 @@ function handlePauseInput(cmd: ShipCommand): void {
     return;
   }
   if (pauseActionIndex === 0) resumeRace();
-  else if (pauseActionIndex === 1) startRace();
+  else if (pauseActionIndex === 1) startRace('retry');
   else if (pauseActionIndex === 2) {
     previousMenuScene = 'pause';
     setAppScene('settings', 'Tune controls and readability.');
@@ -782,194 +654,8 @@ function handleResultsInput(cmd: ShipCommand): void {
     if (cmd.menuLeft || cmd.menuRight) renderAppScene(finishMessage);
     return;
   }
-  if (resultsActionIndex === 0) startRace();
+  if (resultsActionIndex === 0) startRace('retry');
   else setAppScene('title', 'Field terminal ready.');
-}
-
-async function withFriendBusy(label: string, action: () => Promise<void>): Promise<void> {
-  if (friendBusy) return;
-  friendBusy = true;
-  friendStatusMessage = label;
-  renderAppScene();
-  try {
-    await action();
-    if (friendStatusMessage === label) friendStatusMessage = '';
-  } catch (err) {
-    const raw = err instanceof Error ? err.message : String(err);
-    if (/PGRST205|schema cache|friend_heat/.test(raw)) {
-      friendStatusMessage = 'Friend Heat tables missing. Apply docs/database/supabase-racing.sql in Supabase.';
-    } else {
-      friendStatusMessage = `Error: ${shortError(raw)}`;
-    }
-  } finally {
-    friendBusy = false;
-    renderAppScene();
-  }
-}
-
-function friendEntryRowCount(): number {
-  return 5;
-}
-
-function handleFriendEntryInput(cmd: ShipCommand): void {
-  if (!friendHeat) {
-    setAppScene('title', 'Friend Heat unavailable.');
-    return;
-  }
-  const rows = friendEntryRowCount();
-  if (cmd.menuUp) {
-    friendEntryFocusIndex = wrapIndex(friendEntryFocusIndex - 1, rows);
-    renderAppScene();
-    return;
-  }
-  if (cmd.menuDown) {
-    friendEntryFocusIndex = wrapIndex(friendEntryFocusIndex + 1, rows);
-    renderAppScene();
-    return;
-  }
-  if (cmd.menuBack) {
-    setAppScene('title', 'Field terminal ready.');
-    return;
-  }
-  if (friendEntryFocusIndex === 0 && (cmd.menuLeft || cmd.menuRight)) {
-    selectCourse(selectedCourseIndex + (cmd.menuLeft ? -1 : 1));
-    return;
-  }
-  if (friendEntryFocusIndex === 1 && (cmd.menuLeft || cmd.menuRight)) {
-    friendHeatDurationIndex = wrapIndex(friendHeatDurationIndex + (cmd.menuLeft ? -1 : 1), HEAT_DURATION_OPTIONS.length);
-    renderAppScene();
-    return;
-  }
-  if (!cmd.menuConfirm && !cmd.startRace) return;
-  if (friendEntryFocusIndex === 2) {
-    const courseId = selectedCourse.id;
-    const dur = HEAT_DURATION_OPTIONS[friendHeatDurationIndex];
-    void withFriendBusy('Creating heat...', async () => {
-      await friendHeat!.createLobby(courseId, dur);
-      setAppScene('friend-lobby', 'Heat created. Share the invite code.');
-    });
-    return;
-  }
-  if (friendEntryFocusIndex === 3) {
-    const code = friendJoinCodeInput.trim();
-    if (!code) {
-      friendStatusMessage = 'Enter an invite code.';
-      renderAppScene();
-      return;
-    }
-    void withFriendBusy('Joining heat...', async () => {
-      await friendHeat!.joinLobby(code);
-      setAppScene('friend-lobby', 'Joined heat.');
-    });
-    return;
-  }
-  if (friendEntryFocusIndex === 4) {
-    setAppScene('title', 'Field terminal ready.');
-    return;
-  }
-}
-
-function friendLobbyOptionCount(): number {
-  const snap = friendHeatSnapshot;
-  if (!snap) return 1;
-  const isHost = friendHeat?.isHost() ?? false;
-  if (snap.lobby.status === 'lobby') return isHost ? 3 : 2;
-  if (snap.lobby.status === 'active') return 2;
-  return 1;
-}
-
-function handleFriendLobbyInput(cmd: ShipCommand): void {
-  const snap = friendHeatSnapshot;
-  if (!snap || !friendHeat) {
-    setAppScene('title', 'Lobby closed.');
-    return;
-  }
-  const count = friendLobbyOptionCount();
-  if (cmd.menuUp) {
-    friendLobbyFocusIndex = wrapIndex(friendLobbyFocusIndex - 1, count);
-    renderAppScene();
-    return;
-  }
-  if (cmd.menuDown) {
-    friendLobbyFocusIndex = wrapIndex(friendLobbyFocusIndex + 1, count);
-    renderAppScene();
-    return;
-  }
-  if (cmd.menuBack) {
-    void leaveFriendHeat('Left the heat.');
-    return;
-  }
-  if (!cmd.menuConfirm && !cmd.startRace) return;
-  const isHost = friendHeat.isHost();
-  if (snap.lobby.status === 'lobby') {
-    if (friendLobbyFocusIndex === 0) {
-      const me = snap.participants.find((p) => p.playerName === friendHeat.getPlayerName());
-      const next = !(me?.ready ?? false);
-      void withFriendBusy(next ? 'Marking ready...' : 'Marking unready...', async () => {
-        await friendHeat!.setReady(next);
-      });
-      return;
-    }
-    if (friendLobbyFocusIndex === 1 && isHost) {
-      void withFriendBusy('Starting heat...', async () => {
-        await friendHeat!.startHeat();
-      });
-      return;
-    }
-    void leaveFriendHeat('Left the heat.');
-    return;
-  }
-  if (snap.lobby.status === 'active') {
-    if (friendLobbyFocusIndex === 0) {
-      if (!friendHeat.canStartAttempt()) {
-        friendStatusMessage = 'Heat timer expired - no new attempts.';
-        renderAppScene();
-        return;
-      }
-      startHeatAttempt();
-      return;
-    }
-    void leaveFriendHeat('Left the heat.');
-    return;
-  }
-  void leaveFriendHeat('Heat closed.');
-}
-
-function handleFriendResultsInput(cmd: ShipCommand): void {
-  if (cmd.menuLeft) friendResultsActionIndex = wrapIndex(friendResultsActionIndex - 1, 1);
-  if (cmd.menuRight) friendResultsActionIndex = wrapIndex(friendResultsActionIndex + 1, 1);
-  if (cmd.menuBack || cmd.menuConfirm || cmd.startRace) {
-    void leaveFriendHeat('Heat closed.');
-  }
-}
-
-async function leaveFriendHeat(message: string): Promise<void> {
-  if (!friendHeat) {
-    setAppScene('title', message);
-    return;
-  }
-  try {
-    await friendHeat.leaveLobby();
-  } catch (err) {
-    console.warn('[friend-heat] leave failed', err);
-  }
-  raceIsHeatAttempt = false;
-  syncGhostRuns(selectedCourse.id);
-  setAppScene('title', message);
-}
-
-function handleInvalidInput(cmd: ShipCommand): void {
-  if (cmd.menuLeft || cmd.menuRight) invalidActionIndex = wrapIndex(invalidActionIndex + (cmd.menuLeft ? -1 : 1), 2);
-  if (cmd.menuBack) {
-    setAppScene('course', 'Course board ready.');
-    return;
-  }
-  if (!cmd.menuConfirm && !cmd.startRace) {
-    if (cmd.menuLeft || cmd.menuRight) renderAppScene();
-    return;
-  }
-  if (invalidActionIndex === 0) startRace();
-  else setAppScene('course', 'Course board ready.');
 }
 
 const SETTINGS_ROWS = [
@@ -1137,13 +823,9 @@ function tickPhysics(): void {
     return;
   }
   if (cmd.toggleCameraMode) applyCameraToggle();
-  if (cmd.cycleShipVisual && race.state !== 'racing' && race.state !== 'countdown') {
-    ship.cycleVariant(1);
-    void resolveAndSwapShipVisual();
-    showToast(`SHIP ${ship.variantName}`, 1200);
-  }
 
-  const raceEvent = race.update(FIXED_DT);
+  const launchRequested = Math.max(Math.abs(cmd.thrust.x), Math.abs(cmd.thrust.y), Math.abs(cmd.thrust.z)) > 0.08;
+  const raceEvent = race.update(FIXED_DT, launchRequested);
   if (raceEvent.started) {
     ship.setFrozen(false);
     goOverlayTimer = 0.75;
@@ -1163,13 +845,25 @@ function tickPhysics(): void {
   const preStepSpeed = ship.speed;
   const p = ship.position;
   shipPosVec.set(p.x, p.y, p.z);
+  const boundary = courseBoundary.update(shipPosVec, FIXED_DT);
+  outOfBoundsRemaining = boundary.outside ? boundary.remainingSec : null;
+  if (boundary.outside && !outOfBoundsWarningShown) {
+    outOfBoundsWarningShown = true;
+    showToast('RETURN TO COURSE', 1200);
+  } else if (!boundary.outside) {
+    outOfBoundsWarningShown = false;
+  }
+  if (boundary.outside && boundary.remainingSec <= 0) {
+    showToast('COURSE LOST — THRUST TO RETRY', 1500);
+    startRace('retry');
+    return;
+  }
   gravitySample = sampleGravityAt(shipPosVec, asteroidField.asteroids);
   checkTutorialProximityTips();
   if (gravitySample.strongestPull > 10 && gravitySample.closestClearance < 95) {
     audio.closeWellWarning(Math.min(1, gravitySample.strongestPull / 24));
   }
   ship.setAmbientPull(gravitySample.strongestPull);
-  ship.setCargoFraction(0);
   ship.applyAcceleration(gravitySample.acceleration, FIXED_DT);
 
   const boost = Math.max(0, Math.min(1, cmd.boost));
@@ -1215,6 +909,18 @@ function tickPhysics(): void {
 
   const v = ship.linearVelocity;
   const speed = Math.hypot(v.x, v.y, v.z);
+  const slingshotEvent = slingshotFeedback.update(
+    gravitySample.strongestClass,
+    gravitySample.strongestPull,
+    gravitySample.strongestClearance,
+    speed,
+    FIXED_DT,
+  );
+  if (slingshotEvent) {
+    audio.slingshotWhoosh(slingshotEvent.intensity);
+    if (!settings.reducedMotion) postfx.triggerSlingshot(slingshotEvent.intensity);
+    showToast(`HOT PASS  +${slingshotEvent.speedGain.toFixed(0)} m/s`, 900);
+  }
   if (speed > peakSpeed) peakSpeed = speed;
   if (hasPrevVelocity) {
     const ax = (v.x - prevVelocity.x) / FIXED_DT;
@@ -1229,9 +935,6 @@ function tickPhysics(): void {
   tmpQuat.set(r.x, r.y, r.z, r.w);
   tmpThrustWorld.set(cmd.thrust.x, cmd.thrust.y, cmd.thrust.z).applyQuaternion(tmpQuat);
   feedback.update(gravitySample.acceleration, tmpThrustWorld, FIXED_DT, input.readGamepad());
-
-  const distFromBase = Math.hypot(p.x - BASE_POS.x, p.y - BASE_POS.y, p.z - BASE_POS.z);
-  currentZone = zoneFor(distFromBase);
 
   let deathThisTick = false;
   physics.eventQueue.drainCollisionEvents((h1, h2, started) => {
@@ -1250,11 +953,6 @@ function tickPhysics(): void {
       }
     }
   });
-  if (lifecycle.current === 'alive' && asteroidField.intersectsVisualHazardSegment(p, ship.position)) {
-    audio.dustImpact(Math.max(0.35, Math.min(1.4, preStepSpeed / 160)));
-    deathThisTick = true;
-  }
-
   if (deathThisTick) {
     audio.wreckTone();
     tmpDeathPos.set(ship.position.x, ship.position.y, ship.position.z);
@@ -1265,16 +963,37 @@ function tickPhysics(): void {
   lifecycle.update(FIXED_DT);
 }
 
-function render(): void {
+function render(dt: number): void {
   ship.syncMeshFromBody();
   dust.update(ship.position);
   trajectory = predictTrajectory(ship.position, ship.linearVelocity, asteroidField.asteroids);
   trajectoryStart.set(0, 0, -2.8).applyQuaternion(ship.mesh.quaternion).add(ship.mesh.position);
   trajectoryRibbon.update(trajectory, trajectoryStart);
+  courseGuideLine.update(dt);
   syncCamera();
   updateRingTracker();
   feedback.apply(camera);
   skybox.position.copy(camera.position);
+
+  // Speed-reactive frame: FOV punches out and chromatic aberration / vignette
+  // ramp with velocity (and harder on boost) so fast actually reads as fast.
+  const racing = race.state === 'racing';
+  const speed01 = racing ? Math.min(1, ship.speed / SPEED_FOV_REF) : 0;
+  const boost01 = racing ? audioBoost : 0;
+  const well01 = racing && gravitySample.strongestClass === 'strong'
+    ? Math.min(1, gravitySample.strongestPull / 24)
+    : racing && gravitySample.strongestClass === 'weak'
+      ? Math.min(0.35, gravitySample.strongestPull / 30)
+      : 0;
+  const targetFov = BASE_FOV + speed01 * 12 + boost01 * 8;
+  const k = 1 - Math.exp(-6 * dt);
+  if (Math.abs(camera.fov - targetFov) > 0.01) {
+    camera.fov += (targetFov - camera.fov) * k;
+    camera.updateProjectionMatrix();
+  }
+  postfx.setDynamics(speed01, boost01, well01, dt);
+
+  debugViz.update();
   composer.render();
   fadeOverlay.style.opacity = String(lifecycle.fadeAlpha);
   if (panelsVisible && padDebugVisible) renderPadDebug();
@@ -1299,7 +1018,7 @@ function loop(nowMs: number): void {
   }
   if (steps === MAX_STEPS_PER_FRAME) accumulator = 0;
 
-  render();
+  render(frameDt);
   if (race.state === 'racing') {
     audio.update(gravitySample.strongestPull, gravitySample.closestClearance, frameDt, 0);
     audio.updateFlight(audioThrustDemand, audioBoost, frameDt);
@@ -1313,10 +1032,7 @@ function loop(nowMs: number): void {
   tuningPanel.update({
     fps,
     speed: ship.speed,
-    cargo: 0,
-    bank: 0,
     energy: energy.fraction,
-    mineRate: 0,
     pull: gravitySample.strongestPull,
     clearance: gravitySample.closestClearance,
     state: race.state,
@@ -1333,13 +1049,14 @@ function loop(nowMs: number): void {
     const targetDist = target ? Math.hypot(target.x - sp.x, target.y - sp.y, target.z - sp.z) : 0;
     const padHint = input.readGamepad() ? 'gamepad yes' : 'gamepad -';
     const lockHint = input.isPointerLocked() ? '' : '  (click to capture mouse)';
+    const asteroidCounts = asteroidField.gravityClassCounts();
     hud.textContent =
       `Slingshot League - time trials\n` +
-      `fps ${fps.toFixed(0)}  dt ${(FIXED_DT * 1000).toFixed(2)}ms  cam ${cameraMode}  ${zoneLabel(currentZone)}\n` +
+      `fps ${fps.toFixed(0)}  dt ${(FIXED_DT * 1000).toFixed(2)}ms  cam ${cameraMode}\n` +
       `course ${selectedCourse.name}  state ${race.state}  gate ${Math.min(race.nextCheckpoint + 1, selectedCourse.gates.length)} / ${selectedCourse.gates.length}\n` +
       `time ${formatRaceTime(race.elapsedSec)}  target ${targetDist.toFixed(0)}m  speed ${ship.speed.toFixed(1)} m/s  peak ${peakSpeed.toFixed(1)}\n` +
       `pull ${gravitySample.strongestPull.toFixed(2)} m/s^2  clearance ${gravitySample.closestClearance.toFixed(0)}m  accel ${accelMag.toFixed(1)} m/s^2\n` +
-      `${asteroidField.asteroids.length} asteroids  rivals ${ghostStatusLabel()}  ${padHint}${lockHint}`;
+      `${asteroidField.asteroids.length} asteroids (${asteroidCounts.ordinary}/${asteroidCounts.weak}/${asteroidCounts.strong})  rivals ${ghostStatusLabel()}  ${padHint}${lockHint}`;
   }
 
   requestAnimationFrame(loop);
@@ -1379,12 +1096,14 @@ function updateStatus(): void {
   // State readout in field-pilot language, not sterile UI labels.
   const stateText =
     race.state === 'countdown' ? `HOLD ${Math.ceil(race.countdownSec)}` :
+    race.state === 'ready' ? 'THRUST TO LAUNCH' :
     race.state === 'finished' ? finishMessage :
     race.state === 'invalid' ? `SCRUBBED · ${race.invalidReason}` :
     race.state === 'select' ? 'PICK A LANE' :
+    outOfBoundsRemaining !== null ? `RETURN ${outOfBoundsRemaining.toFixed(1)}S` :
     'ON THE CLOCK';
   const stateClass =
-    race.state === 'invalid' ? 'alert' :
+    race.state === 'invalid' || outOfBoundsRemaining !== null ? 'alert' :
     race.state === 'finished' ? 'go' : '';
 
   // Gate progress as bolt-pips; fall back to a count for long courses.
@@ -1408,7 +1127,8 @@ function updateStatus(): void {
     : pull >= 15 ? 2
     : pull >= 5 ? 1
     : 0;
-  const wellSub = Number.isFinite(clear) ? `${clear.toFixed(0)}M CLEAR` : 'OPEN SPACE';
+  const wellClass = gravitySample.strongestClass?.toUpperCase() ?? 'NONE';
+  const wellSub = Number.isFinite(clear) ? `${wellClass} · ${clear.toFixed(0)}M CLEAR` : 'OPEN SPACE';
 
   const SPEED_REF = 360; // gauge fill reference, not a hard cap
   const speedPct = Math.max(0, Math.min(1, ship.speed / SPEED_REF)) * 100;
@@ -1460,6 +1180,9 @@ function updateCountdownOverlay(dt: number): void {
       countdownCue = whole;
       audio.countdownTick();
     }
+  } else if (race.state === 'ready') {
+    text = 'THRUST';
+    detail = 'LAUNCH ON INPUT';
   } else if (goOverlayTimer > 0) {
     text = 'GO';
     detail = selectedCourse.lore?.launchCallout ?? selectedCourse.name;
@@ -1499,7 +1222,7 @@ function renderControls(): void {
     <div class="row"><b>A/D</b> roll, <b>Q/E</b> yaw</div>
     <div class="row"><b>Space/Ctrl</b> strafe up/down</div>
     <div class="row"><b>Shift</b> boost</div>
-    <div class="row"><b>C</b> camera, <b>V</b> ship visual</div>
+    <div class="row"><b>C</b> camera</div>
     <div class="row"><b>P</b> tuning, <b>O</b> panels, <b>G</b> pad debug</div>
   `;
 }
@@ -1517,19 +1240,14 @@ function renderAppScene(message = menuMessage, recordOverride?: CourseRecord): v
     appScene === 'title' ? renderTitleScene(message) :
     appScene === 'course' ? renderCourseBoard(message) :
     appScene === 'pause' ? renderPauseScene() :
-    appScene === 'invalid' ? renderInvalidScene(message) :
     appScene === 'results' ? renderResultsScene(recordOverride) :
-    appScene === 'field-notes' ? renderFieldNotesScene(message) :
-    appScene === 'friend-entry' ? renderFriendEntryScene(message) :
-    appScene === 'friend-lobby' ? renderFriendLobbyScene(message) :
-    appScene === 'friend-results' ? renderFriendResultsScene(message) :
     renderSettingsScene(message);
 
   coursePanel.innerHTML = html;
   coursePanel.style.display = '';
   wireSceneEvents();
   if (appScene === 'settings') syncSettingsScrollAfterRender();
-  if (appScene === 'title' || appScene === 'course' || appScene === 'field-notes') scrollSelectedCourseIntoView();
+  if (appScene === 'title' || appScene === 'course') scrollSelectedCourseIntoView();
 }
 
 function renderTitleScene(_message: string): string {
@@ -1538,45 +1256,6 @@ function renderTitleScene(_message: string): string {
 
 function renderCourseBoard(_message: string): string {
   return renderStartScreen('course');
-}
-
-function renderFieldNotesScene(_message: string): string {
-  const lore = selectedCourse.lore;
-  const actions = ['Start race', 'Back to board']
-    .map((label, index) => menuButton(label, index === fieldNotesActionIndex, `field-notes-action-${index}`)).join('');
-  const anchorCount = selectedCourse.field.gravityAnchorCount;
-  const deadIronRead = anchorCount <= 0
-    ? 'No marked anchor bodies on the racing line.'
-    : `${anchorCount} marked Dead Iron ${anchorCount === 1 ? 'body' : 'bodies'} near the route.`;
-  const gateNames = selectedCourse.gates.map((gate) => gate.label).join(' / ');
-
-  return sceneShell('Field Notes', selectedCourse.name, lore?.fieldNote ?? selectedCourse.summary, `
-    <div class="field-notes-layout">
-      <section class="terminal-panel field-notes-main">
-        <div class="section-title"><h2>Dead Iron Brief</h2><span>${escapeHtml(biomeLabel(selectedCourse))}</span></div>
-        <div class="field-note-callout">${escapeHtml(lore?.fieldNote ?? selectedCourse.summary)}</div>
-        <p>${escapeHtml(lore?.codexEntry ?? 'This course is logged on the claim board as a gravity racing lane. Read the gates, watch the field cues, and keep the ship out of capture lines.')}</p>
-        <div class="terminal-readout">
-          <span>Difficulty</span><b>${escapeHtml(difficultyLabel(selectedCourse))}</b>
-          <span>Gravity</span><b>${escapeHtml(gravityLabel(selectedCourse))}</b>
-          <span>Dead Iron</span><b>${escapeHtml(deadIronRead)}</b>
-          <span>Route</span><b>${escapeHtml(gateNames)}</b>
-        </div>
-        <div class="field-rules">
-          <span>Close passes create speed and stress.</span>
-          <span>Heavy rocks are safest when you are already leaving them.</span>
-          <span>The ghost line is a rival, not an order.</span>
-        </div>
-        <div class="scene-actions">${actions}</div>
-      </section>
-      <section class="terminal-panel field-notes-side">
-        <div class="section-title"><h2>Course Stack</h2><span>D-pad up/down changes file</span></div>
-        <div class="field-course-list">
-          ${RACE_COURSES.map((course, index) => startCourseRow(course, index)).join('')}
-        </div>
-      </section>
-    </div>
-  `);
 }
 
 function renderStartScreen(mode: 'title' | 'course'): string {
@@ -1593,7 +1272,7 @@ function renderStartScreen(mode: 'title' | 'course'): string {
     <div class="start-screen" role="dialog" aria-label="Slingshot start screen">
       <header class="start-header">
         <div class="start-brand">
-          <div class="slingshot-logo" aria-label="Slingshot" style="--logo-url: url('${escapeHtml(slingshotLogoUrl)}')"></div>
+          <img class="slingshot-logo" src="${escapeHtml(slingshotLogoUrl)}" alt="Slingshot" />
           <div class="league-title">Dead Iron Racing League</div>
         </div>
         <div class="pilot-row start-pilot">${pilotInputHtml()}</div>
@@ -1633,14 +1312,12 @@ function renderStartScreen(mode: 'title' | 'course'): string {
             </div>
             <div class="start-actions">
               <button id="${actionPrefix}-0" class="launch-action${activeAction === 0 ? ' selected' : ''}">Start Race</button>
-              <button id="${actionPrefix}-1" class="utility-action${activeAction === 1 ? ' selected' : ''}">Friend Heat</button>
+              <button id="${actionPrefix}-1" class="utility-action${activeAction === 1 ? ' selected' : ''}">Settings</button>
             </div>
           </div>
         </section>
       </main>
       <div class="menu-hints start-hints">
-        <button id="${actionPrefix}-2" class="footer-settings${activeAction === 2 ? ' selected' : ''}">Field Notes</button>
-        <button id="${actionPrefix}-3" class="footer-settings${activeAction === 3 ? ' selected' : ''}">Settings</button>
         <span>${input.readGamepad() ? 'Controller linked' : 'Controller standby'}</span>
         <span>D-pad / stick: course</span>
         <span>Left / right: action</span>
@@ -1659,20 +1336,6 @@ function renderPauseScene(): string {
       <section class="terminal-panel pause-panel">
         <div class="section-title"><h2>Run Hold</h2><span>Start/B resumes</span></div>
         <div class="action-stack">${options}</div>
-      </section>
-    </div>
-  `);
-}
-
-function renderInvalidScene(message: string): string {
-  const actions = ['Retry', 'Course board'].map((label, index) => menuButton(label, index === invalidActionIndex, `invalid-action-${index}`)).join('');
-  const warning = selectedCourse.lore?.fieldNote ?? 'That rock was pulling hard.';
-  return sceneShell('Run Lost', selectedCourse.name, message || race.invalidReason, `
-    <div class="center-panel">
-      <section class="terminal-panel lost-panel">
-        <div class="section-title"><h2>${escapeHtml(race.invalidReason || 'Wrecked')}</h2><span>${formatRaceTime(race.elapsedSec)}</span></div>
-        <p class="field-warning">${escapeHtml(warning)}</p>
-        <div class="scene-actions">${actions}</div>
       </section>
     </div>
   `);
@@ -1712,244 +1375,6 @@ function renderResultsScene(recordOverride?: CourseRecord): string {
       </section>
     </div>
   `);
-}
-
-function renderFriendEntryScene(message: string): string {
-  const dur = HEAT_DURATION_OPTIONS[friendHeatDurationIndex];
-  const courseRow = friendCycleRow('Course', selectedCourse.name, friendEntryFocusIndex === 0, 'friend-entry-course');
-  const durationRow = friendCycleRow('Heat duration', `${Math.round(dur / 60)} min`, friendEntryFocusIndex === 1, 'friend-entry-duration');
-  const createRow = friendActionRow('Create heat', `Host an invite-code lobby on ${selectedCourse.name}`, friendEntryFocusIndex === 2, 'friend-entry-create');
-  const joinRow = friendJoinRow(friendEntryFocusIndex === 3);
-  const backRow = friendActionRow('Back', 'Return to title board', friendEntryFocusIndex === 4, 'friend-entry-back');
-  const errorBlock = friendStatusMessage ? `<p class="friend-status">${escapeHtml(friendStatusMessage)}</p>` : '';
-  const body = `
-    <div class="friend-panel">
-      <section class="terminal-panel friend-card">
-        <div class="section-title"><h2>Friend Heat</h2><span>private invite-code lobby</span></div>
-        <p class="friend-blurb">Race a shared course with friends during a single heat. Only the current lobby-best run becomes the ghost.</p>
-        ${errorBlock}
-        <div class="friend-row-list">
-          ${courseRow}
-          ${durationRow}
-          ${createRow}
-          ${joinRow}
-          ${backRow}
-        </div>
-      </section>
-    </div>`;
-  return sceneShell('Friend Heat', selectedCourse.name, message, body);
-}
-
-function renderFriendLobbyScene(message: string): string {
-  const snap = friendHeatSnapshot;
-  if (!snap) {
-    return sceneShell('Friend Heat', selectedCourse.name, message, `
-      <div class="friend-panel">
-        <section class="terminal-panel friend-card">
-          <p>No active lobby. Returning to title.</p>
-        </section>
-      </div>`);
-  }
-  const remaining = friendHeat?.remainingSec() ?? 0;
-  const isHost = friendHeat?.isHost() ?? false;
-  const statusLabel =
-    snap.lobby.status === 'lobby' ? 'WAITING' :
-    snap.lobby.status === 'active' ? (remaining > 0 ? 'LIVE' : 'CLOSING') :
-    'CLOSED';
-  const remainingLabel =
-    snap.lobby.status === 'lobby' ? `${Math.round(snap.lobby.heatDurationSec / 60)} min heat` :
-    snap.lobby.status === 'active' ? formatHeatRemaining(remaining) :
-    '--:--';
-  const inviteBlock = `
-    <div class="friend-invite">
-      <span>Invite code</span>
-      <b>${escapeHtml(snap.lobby.inviteCode)}</b>
-      <em>${escapeHtml(snap.lobby.courseId)}</em>
-    </div>`;
-  const timerBlock = `
-    <div class="friend-timer">
-      <span>${escapeHtml(statusLabel)}</span>
-      <b>${escapeHtml(remainingLabel)}</b>
-      <em>host ${escapeHtml(snap.lobby.hostName)}${isHost ? ' (you)' : ''}</em>
-    </div>`;
-
-  const me = friendHeat?.getPlayerName() ?? '';
-  const participantRows = snap.participants.map((p) => `
-    <li class="${p.playerName === me ? 'me' : ''}">
-      <span>${escapeHtml(p.playerName)}${p.playerName === me ? ' <' : ''}</span>
-      <em>${p.ready ? 'READY' : 'standing by'}</em>
-      ${p.playerName === snap.lobby.hostName ? '<b>HOST</b>' : '<b></b>'}
-    </li>`).join('');
-
-  const runRows = snap.runs.length
-    ? snap.runs.map((run, idx) => `
-      <li class="${run.playerName === me ? 'me' : ''} rank-${Math.min(idx + 1, 4)}">
-        <span>${idx + 1}</span>
-        <b>${escapeHtml(run.playerName)}${run.playerName === me ? ' <' : ''}</b>
-        <em>${formatRaceTime(run.timeSec)}</em>
-      </li>`).join('')
-    : '<li class="empty">No heat runs yet.</li>';
-
-  const options = friendLobbyOptions(snap, isHost);
-  const optionsHtml = options.map((opt, index) => menuButton(opt.label, index === friendLobbyFocusIndex, `friend-lobby-action-${index}`)).join('');
-
-  const errorBlock = friendStatusMessage ? `<p class="friend-status">${escapeHtml(friendStatusMessage)}</p>` : '';
-
-  const body = `
-    <div class="friend-panel friend-lobby-layout">
-      <section class="terminal-panel friend-card">
-        <div class="section-title"><h2>Lobby</h2><span>private heat</span></div>
-        <div class="friend-summary">
-          ${inviteBlock}
-          ${timerBlock}
-        </div>
-        ${errorBlock}
-        <div class="section-title"><h2>Pilots</h2><span>${snap.participants.length} in lobby</span></div>
-        <ul class="friend-participants">${participantRows || '<li class="empty">Waiting...</li>'}</ul>
-        <div class="action-stack">${optionsHtml}</div>
-      </section>
-      <section class="terminal-panel friend-card">
-        <div class="section-title"><h2>Heat Board</h2><span>lobby standings</span></div>
-        <ol class="friend-runs">${runRows}</ol>
-        <p class="friend-tip">Lobby-best ghost loads on next attempt start.</p>
-      </section>
-    </div>`;
-  return sceneShell('Friend Heat', snap.lobby.courseId, message, body);
-}
-
-function renderFriendResultsScene(message: string): string {
-  const snap = friendHeatSnapshot;
-  if (!snap) return sceneShell('Friend Heat', selectedCourse.name, message, '<div class="friend-panel"><section class="terminal-panel friend-card"><p>Heat closed.</p></section></div>');
-  const me = friendHeat?.getPlayerName() ?? '';
-  const myBest = snap.runs.find((run) => run.playerName === me) ?? null;
-  const winner = snap.lobbyBest;
-  const runRows = snap.runs.length
-    ? snap.runs.map((run, idx) => `
-      <li class="${run.playerName === me ? 'me' : ''} rank-${Math.min(idx + 1, 4)}">
-        <span>${idx + 1}</span>
-        <b>${escapeHtml(run.playerName)}${run.playerName === me ? ' <' : ''}</b>
-        <em>${formatRaceTime(run.timeSec)}</em>
-      </li>`).join('')
-    : '<li class="empty">No completed heat runs.</li>';
-  const body = `
-    <div class="friend-panel friend-lobby-layout">
-      <section class="terminal-panel friend-card">
-        <div class="section-title"><h2>Heat Result</h2><span>${escapeHtml(snap.lobby.courseId)}</span></div>
-        <div class="friend-summary">
-          <div class="friend-timer">
-            <span>WINNER</span>
-            <b>${winner ? escapeHtml(winner.playerName) : '--'}</b>
-            <em>${winner ? formatRaceTime(winner.timeSec) : 'no completed runs'}</em>
-          </div>
-          <div class="friend-timer">
-            <span>YOUR BEST</span>
-            <b>${myBest ? formatRaceTime(myBest.timeSec) : '--'}</b>
-            <em>${myBest && winner ? formatDelta(myBest.timeSec - winner.timeSec) : ''}</em>
-          </div>
-        </div>
-        <div class="scene-actions">${menuButton('Back to title', true, 'friend-results-action-0')}</div>
-      </section>
-      <section class="terminal-panel friend-card">
-        <div class="section-title"><h2>Heat Board</h2><span>final lobby standings</span></div>
-        <ol class="friend-runs">${runRows}</ol>
-      </section>
-    </div>`;
-  return sceneShell('Friend Heat', snap.lobby.courseId, message, body);
-}
-
-interface FriendLobbyOption { label: string; }
-
-function friendLobbyOptions(snap: FriendHeatSnapshot, isHost: boolean): FriendLobbyOption[] {
-  const remaining = friendHeat?.remainingSec() ?? 0;
-  if (snap.lobby.status === 'lobby') {
-    const me = snap.participants.find((p) => p.playerName === (friendHeat?.getPlayerName() ?? ''));
-    const readyLabel = me?.ready ? 'Stand down' : 'Mark ready';
-    const opts: FriendLobbyOption[] = [{ label: readyLabel }];
-    if (isHost) opts.push({ label: 'Start heat' });
-    opts.push({ label: 'Leave lobby' });
-    return opts;
-  }
-  if (snap.lobby.status === 'active') {
-    return [
-      { label: remaining > 0 ? 'Start attempt' : 'Heat timer expired' },
-      { label: 'Leave lobby' },
-    ];
-  }
-  return [{ label: 'Back to title' }];
-}
-
-function friendCycleRow(label: string, value: string, selected: boolean, id: string): string {
-  return `<button id="${id}" class="setting-row cycle-row${selected ? ' selected' : ''}">
-    <span>${escapeHtml(label)}</span>
-    <span class="cycle-value">
-      <em class="cycle-arrow" aria-hidden="true">&lsaquo;</em>
-      <b>${escapeHtml(value)}</b>
-      <em class="cycle-arrow" aria-hidden="true">&rsaquo;</em>
-    </span>
-  </button>`;
-}
-
-function friendActionRow(label: string, hint: string, selected: boolean, id: string): string {
-  return `<button id="${id}" class="setting-row${selected ? ' selected' : ''}">
-    <span>${escapeHtml(label)}</span>
-    <b>${escapeHtml(hint)}</b>
-  </button>`;
-}
-
-function friendJoinRow(selected: boolean): string {
-  return `<div id="friend-entry-join" class="setting-row friend-join-row${selected ? ' selected' : ''}">
-    <span>Join with code</span>
-    <input id="friend-join-code" maxlength="16" autocomplete="off" spellcheck="false" placeholder="ABC123" value="${escapeHtml(friendJoinCodeInput)}">
-  </div>`;
-}
-
-function wireFriendSceneEvents(): void {
-  if (appScene === 'friend-entry') {
-    for (let i = 0; i < friendEntryRowCount(); i++) {
-      const ids = ['friend-entry-course', 'friend-entry-duration', 'friend-entry-create', 'friend-entry-join', 'friend-entry-back'];
-      const el = coursePanel.querySelector<HTMLElement>(`#${ids[i]}`);
-      el?.addEventListener('click', (event) => {
-        if ((event.target as HTMLElement).tagName === 'INPUT') return;
-        friendEntryFocusIndex = i;
-        if (i === 0 || i === 1) {
-          handleFriendEntryInput({ ...emptyMenuCommand(), menuRight: true });
-          return;
-        }
-        handleFriendEntryInput({ ...emptyMenuCommand(), menuConfirm: true });
-      });
-      el?.addEventListener('contextmenu', (event) => {
-        if (i !== 0 && i !== 1) return;
-        event.preventDefault();
-        friendEntryFocusIndex = i;
-        handleFriendEntryInput({ ...emptyMenuCommand(), menuLeft: true });
-      });
-    }
-    const codeInput = coursePanel.querySelector<HTMLInputElement>('#friend-join-code');
-    codeInput?.addEventListener('input', () => {
-      friendJoinCodeInput = codeInput.value.toUpperCase();
-      codeInput.value = friendJoinCodeInput;
-    });
-    codeInput?.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        friendEntryFocusIndex = 3;
-        handleFriendEntryInput({ ...emptyMenuCommand(), menuConfirm: true });
-      }
-    });
-  } else if (appScene === 'friend-lobby') {
-    const count = friendLobbyOptionCount();
-    for (let i = 0; i < count; i++) {
-      coursePanel.querySelector<HTMLButtonElement>(`#friend-lobby-action-${i}`)?.addEventListener('click', () => {
-        friendLobbyFocusIndex = i;
-        handleFriendLobbyInput({ ...emptyMenuCommand(), menuConfirm: true });
-      });
-    }
-  } else if (appScene === 'friend-results') {
-    coursePanel.querySelector<HTMLButtonElement>('#friend-results-action-0')?.addEventListener('click', () => {
-      friendResultsActionIndex = 0;
-      handleFriendResultsInput({ ...emptyMenuCommand(), menuConfirm: true });
-    });
-  }
 }
 
 function renderSettingsScene(message: string): string {
@@ -2273,7 +1698,6 @@ function wireSceneEvents(): void {
     if (!pilotInput) return;
     void leaderboard.setPlayerName(pilotInput.value).then(() => {
       pilotInput.value = leaderboard.getPlayerName();
-      friendHeat?.setPlayerName(leaderboard.getPlayerName());
       renderAppScene('Callsign saved. New finished runs will use this name.');
     });
   };
@@ -2283,7 +1707,7 @@ function wireSceneEvents(): void {
     event.preventDefault();
     pilotInput.blur();
   });
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 2; i++) {
     coursePanel.querySelector<HTMLButtonElement>(`#title-action-${i}`)?.addEventListener('click', () => {
       titleActionIndex = i;
       handleTitleInput({ ...emptyMenuCommand(), menuConfirm: true });
@@ -2293,13 +1717,6 @@ function wireSceneEvents(): void {
       handleCourseInput({ ...emptyMenuCommand(), menuConfirm: true });
     });
   }
-  for (let i = 0; i < 2; i++) {
-    coursePanel.querySelector<HTMLButtonElement>(`#field-notes-action-${i}`)?.addEventListener('click', () => {
-      fieldNotesActionIndex = i;
-      handleFieldNotesInput({ ...emptyMenuCommand(), menuConfirm: true });
-    });
-  }
-  wireFriendSceneEvents();
   coursePanel.querySelector<HTMLButtonElement>('#settings-back')?.addEventListener('click', () => {
     handleSettingsInput({ ...emptyMenuCommand(), menuBack: true });
   });
@@ -2313,12 +1730,6 @@ function wireSceneEvents(): void {
     coursePanel.querySelector<HTMLButtonElement>(`#results-action-${i}`)?.addEventListener('click', () => {
       resultsActionIndex = i;
       handleResultsInput({ ...emptyMenuCommand(), menuConfirm: true });
-    });
-  }
-  for (let i = 0; i < 2; i++) {
-    coursePanel.querySelector<HTMLButtonElement>(`#invalid-action-${i}`)?.addEventListener('click', () => {
-      invalidActionIndex = i;
-      handleInvalidInput({ ...emptyMenuCommand(), menuConfirm: true });
     });
   }
   coursePanel.querySelectorAll<HTMLButtonElement>('[data-setting]').forEach((button) => {
@@ -2336,11 +1747,7 @@ function emptyMenuCommand(): ShipCommand {
     rotate: { pitch: 0, yaw: 0, roll: 0 },
     look: { yaw: 0, pitch: 0 },
     boost: 0,
-    fire: false,
     toggleCameraMode: false,
-    cycleShipVisual: false,
-    toggleHangar: false,
-    toggleLock: false,
     restartRace: false,
     startRace: false,
     courseIndex: null,
@@ -3191,9 +2598,8 @@ function injectRaceStyles(): void {
     #course-select .slingshot-logo {
       width: clamp(300px, 42vw, 540px);
       height: clamp(54px, 7.8vw, 94px);
-      background: #ede3cc;
-      -webkit-mask: var(--logo-url) center center / contain no-repeat;
-      mask: var(--logo-url) center center / contain no-repeat;
+      display: block;
+      object-fit: contain;
     }
     #course-select .start-pilot {
       display: flex;
@@ -4653,7 +4059,7 @@ function createRingTracker(): HTMLDivElement {
 
 function updateRingTracker(): void {
   const target = checkpoints.targetPosition(race.nextCheckpoint);
-  if ((race.state !== 'racing' && race.state !== 'countdown') || !target) {
+  if ((race.state !== 'racing' && race.state !== 'countdown' && race.state !== 'ready') || !target) {
     setRingTrackerEdges(0, 0, 0, 0);
     return;
   }

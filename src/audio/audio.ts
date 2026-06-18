@@ -41,6 +41,7 @@ export const AUDIO_TUNING = {
   SFX_MENU_VOLUME: 0.12,
   SFX_BOOST_VOLUME: 0.12,
   SFX_DUST_VOLUME: 0.09,
+  SFX_SLINGSHOT_VOLUME: 0.16,
   THRUST_VOLUME: 0,
   BOOST_LOOP_VOLUME: 0.06,
   MUSIC_VOLUME: 0.35,
@@ -369,6 +370,33 @@ export class GameAudio {
   }
   invalidTone(): void { this.playUi('error', 0.3) || this.blip(130, 85, 0.16, AUDIO_TUNING.SFX_HIT_VOLUME * 0.35, 'sine'); }
   boostKick(): void { this.blip(80, 140, 0.13, AUDIO_TUNING.SFX_BOOST_VOLUME * 0.35, 'sine'); }
+  slingshotWhoosh(intensity: number): void {
+    if (!this.ctx || !this.sfxGain || !this.unlocked) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const level = Math.max(0.25, Math.min(1, intensity));
+    const duration = 0.42;
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      const phase = i / data.length;
+      const envelope = Math.sin(Math.PI * phase) * (1 - phase * 0.35);
+      data[i] = (Math.random() * 2 - 1) * envelope;
+    }
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.setValueAtTime(320, t);
+    band.frequency.exponentialRampToValueAtTime(1650, t + duration);
+    band.Q.value = 0.7;
+    const gain = ctx.createGain();
+    gain.gain.value = AUDIO_TUNING.SFX_SLINGSHOT_VOLUME * level;
+    source.connect(band).connect(gain).connect(this.sfxGain);
+    source.start(t);
+    source.stop(t + duration);
+    this.blip(105, 280, 0.2, AUDIO_TUNING.SFX_SLINGSHOT_VOLUME * 0.28 * level, 'sine');
+  }
   wreckTone(): void {
     this.invalidTone();
     this.dustImpact(1.2);

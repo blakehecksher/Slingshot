@@ -46,7 +46,7 @@ export class GhostReplay {
 
   constructor(scene: THREE.Scene, options: GhostReplayOptions = {}) {
     this.color = options.color ?? DEFAULT_GHOST_COLOR;
-    const built = buildShipVariant('sparrow');
+    const built = buildShipVariant('scrapper');
     this.root = built.root;
     this.root.visible = false;
     this.root.scale.setScalar(1.04);
