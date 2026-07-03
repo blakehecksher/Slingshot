@@ -27,13 +27,18 @@ export class TrajectoryRibbon {
     scene.add(this.line);
   }
 
-  update(trajectory: Trajectory): void {
+  setVisible(visible: boolean): void {
+    this.line.visible = visible;
+  }
+
+  update(trajectory: Trajectory, visualStart?: THREE.Vector3): void {
     const count = Math.min(MAX_POINTS, trajectory.points.length);
     for (let i = 0; i < count; i++) {
       const point = trajectory.points[i];
-      this.positions[i * 3 + 0] = point.position.x;
-      this.positions[i * 3 + 1] = point.position.y;
-      this.positions[i * 3 + 2] = point.position.z;
+      const position = i === 0 && visualStart ? visualStart : point.position;
+      this.positions[i * 3 + 0] = position.x;
+      this.positions[i * 3 + 1] = position.y;
+      this.positions[i * 3 + 2] = position.z;
 
       const d = point.danger;
       this.colors[i * 3 + 0] = d < 0.5 ? d * 2 : 1;

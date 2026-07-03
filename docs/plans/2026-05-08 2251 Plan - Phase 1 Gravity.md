@@ -5,7 +5,7 @@ _Created: 2026-05-08 2251_
 
 ## Goal
 
-Build the smallest possible vertical slice that answers the central question of [docs/spec/gravity-game-vision.md](../spec/gravity-game-vision.md): does flying a ship through a Newtonian-gravity asteroid field feel good? If yes, Phase 2 earns the right to exist. If no, tune or rethink the core before building anything else.
+Build the smallest possible vertical slice that answers the central question of [docs/spec/archive/gravity-game-vision.md](../spec/archive/gravity-game-vision.md): does flying a ship through a Newtonian-gravity asteroid field feel good? If yes, Phase 2 earns the right to exist. If no, tune or rethink the core before building anything else.
 
 Out of scope for Phase 1: mining, resources, energy, enemies, combat, base, upgrades, hull damage, death/respawn, multiplayer, save/persist. Sound is rumble-only.
 

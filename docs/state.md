@@ -1,72 +1,72 @@
 # State
-_Last updated: 2026-05-10_
+_Last updated: 2026-06-18 0027_
 
 ## Current focus
 
-Comprehensive "rest of game" pass implemented. Game now closes the full loop: launch → mine → fight scavengers → return → hangar (build/upgrade) → relaunch. Persistence, ship visual resolver (kit→glb→primitive), kit-built hangar UI with live preview, light combat (enemies + curving projectiles), cargo-mass coupling, field zoning, audio expansion, run stats. Build clean.
+Slingshot is now treated as a focused asteroid time-trial racing fork. The active loop is: choose a course, fly one procedural racing ship through asteroid fields and gates, crash/restart cleanly, finish, and view results.
+
+The authoritative product spec is `docs/spec/spec.md`, updated from active behavior and committed direction on 2026-06-18. The prior outline and Claude fresh-eyes spec remain reference documents.
+
+The active lore/aesthetic companion is `docs/spec/slingshot-lore-and-visual-direction.md`.
 
 ## What's working
 
-- Vite + strict TS, Three.js, Rapier compat, fixed timestep at 1/120s. `tsc --noEmit` + `vite build` clean.
-- Run loop:
-  - Asteroids: spherical-shell distribution (uniform by volume), 900 rocks from 520 m to 8200 m. Size-by-radius bias (`SIZE_INNER_MAX: 0.32`) keeps giants in deep field only. Mineral glints. Slingshots intact.
-  - Death threshold + graze damping unchanged. Cargo scatters on death into pickup chunks.
-  - Mining by proximity. Cargo cap base 2000 kg, raised by parts.
-  - Energy as shaping constraint, reserve-crawl below 5%. Energy pickups seeded.
-  - Boost = 2.5× forward thrust at 4× drain.
-  - Procedural base at origin with 80 m sensor trigger. Deposit + energy refill + run readback toast.
-- Ship visual pipeline (`src/render/shipVisual/`): kit assembler, GLTF loader (cached), mount-point resolver, primitive fallback. Resolver returns the same `BuiltShip` shape regardless of source. `Ship.setVisual(...)` swaps without touching the physics body.
-- Persistence: `localStorage["slingshot.save.v1"]` holds bank, owned parts, current manifest, and run stats. Versioned. Drops on schema bump.
-- Upgrade system = kit parts. Each `BuiltinPartDef` carries a `PartStatDelta`; `computeModsFromParts` turns the manifest into a `ShipMods` overlay (thrust mult, agility mult, cargo cap +, energy max +, hull HP, weapon stats, mining bonus). No separate UPGRADE_DEFS list.
-- Hangar: docks at base, `Tab` (keyboard) / `Y` (gamepad) toggles. DOM overlay with two-mode gamepad nav (rows ↔ options), live 3D preview canvas, stats projection, bank/cost summary. Apply commits the manifest, re-resolves the visual, and saves.
-- Light combat: `WeaponSystem` with curving Rapier projectiles (720 m/s light cutter, 480 m/s heavy slug). Player fires from `weapon-l`/`weapon-r` mounts. `EnemyManager` runs up to 32 (tunable) patrol ships with patrol → engage → flee state machine; highly visible (emissive cockpit, additive halo, point light); ghost through asteroids; scatter ore + bank reward on death; lazy-fill keeps count at target.
-- Lock-on targeting: R3 acquires nearest enemy in 35° forward cone (1800 m max). `ReticleHUD` shows red lockBox at enemy screen position + gold lead circle at quadratic intercept point.
-- First-person / third-person camera: `Back`/`b8` cycles. Reticle visible only in first-person.
-- Cargo-mass coupling: thrust/agility scale down with cargo fraction; subsonic pod hum rises with cargo via WebAudio synth.
-- Skybox feels infinite: dome + starfield Group copies `camera.position` each frame; parallax never reveals boundary.
-- Field zones: open / mid / deep based on distance from base. HUD shows current zone; toasts on first transition.
-- Expanded audio: rumble + creak (samples) plus synthesized SFX (laser, hit, destroy, pickup chime, deposit ka-chunk) and persistent cargo pod hum.
-- HUD: hull bar (red below 30%), cargo bar, bank, energy bar with reserve flash, zone label, run readback on dock, hangar hint when docked.
-- Tuning panel: existing knobs preserved + new sections for Weapons / Combat, Zones, cargo penalties, cargo hum, SFX volumes. Enemy count tunable via `ENEMY_TUNING.COUNT`.
-- README at repo root with controls, loop description, and "how to add a ship part" notes.
+- The app builds cleanly with `npm.cmd run build`.
+- The active source path no longer includes mining, economy/cargo, hangar/upgrades, weapons/combat/enemies, pickups, Friend Heat, draft ship binaries, or ship-builder support files.
+- The active source layout is now much smaller: `src/main.ts`, racing modules, asteroid/gravity/ship/energy/feedback/lifecycle/input, physics, audio, and active render modules.
+- The course board now exposes only Start Race and Settings actions.
+- One procedural racing ship remains active, with primitive ship variants available through the debug/tuning panel and ship-cycle input.
+- Local records, recent runs, splits, and ghosts remain active through `localStorage["slingshot.racing.save.v1"]`.
+- Optional Supabase leaderboard support remains in `src/game/racing/leaderboard.ts`; Friend Heat lobby code was removed.
+- `src/debug/tuningPanel.ts` is now a racing-only tuning panel for ship, gravity, boost energy, crash/restart, asteroids, feedback, and audio.
+- Ship collision filtering now only targets asteroid and checkpoint categories.
+- Real procedural asteroids reject start/gate-clearance violations.
+- Gameplay asteroids now use ordinary, weak Dead Iron, and strong Dead Iron classes. Ordinary rocks collide but do not pull; weak rocks use reduced gravity; strong rocks and authored anchors use full gravity with distinct material/seam treatment.
+- Fresh launches retain the countdown. Manual restart, Retry, crash recovery, and course-loss recovery enter a thrust-to-launch ready state.
+- Hidden tabs and controller disconnects automatically pause active runs.
+- Leaving the computed course envelope warns the player, then resets the full attempt.
+- Strong-well speed-gain passes trigger a dedicated whoosh, visual pulse, and HOT PASS callout.
+
+## In progress
+
+Tuning loop + test sandbox plan `docs/plans/2026-06-07 2230 Plan - Tuning Loop and Test Sandbox.md` is implemented and build-checked; needs a hands-on pass. New capabilities:
+- Tuning persistence: `src/debug/tuningStore.ts` captures an in-source baseline at boot, loads saved overrides from `localStorage["slingshot.tuning.v1"]`. Panel has Save as defaults / Reset to baseline / Clear saved. Per-value reset buttons are always visible and target the baseline.
+- Tuning panel (`src/debug/tuningPanel.ts`) is reorganized: "Sling feel" group open at top (G, core boost, high-speed pull suppression, forward thrust, death speed), then Asteroids (auto-regen on change), Ship, Boost energy, Crash/respawn, Debug view, and a collapsed Advanced group for already-dialed params.
+- Debug visualization (`src/debug/debugViz.ts`): toggles for asteroid hitbox wireframes (true `hitRadius` colliders), a sampled gravity-gradient point grid, and whole-scene wireframe.
+- Flight Test Lab sandbox: `test.html` + `src/test-main.ts`, second Vite entry served at `/Slingshot/test.html`. Strips course/menu/results to spawn-fly-crash-instant-respawn (no countdown, manual respawn handled directly so it never writes the real game's respawn timing). Reuses the same ship/gravity/asteroid/tuning systems and saved defaults.
+- Gamepad quick-tune overlay (`src/debug/quickTune.ts`), wired into the lab only: R3 toggles, D-pad selects/adjusts, A saves defaults, X resets a row to baseline. Curated ~9 feel params.
+
+Recovery cleanup plan `docs/plans/2026-06-07 2125 Plan - Slingshot Recovery Cleanup.md` is partially implemented. The major legacy-system removal, retry-ready flow, and asteroid-class changes are build-checked and browser smoke-tested. Controller feel still needs a hands-on pass.
+
+Unused CSS selectors for removed Friend Heat, field-notes, and invalid scenes still remain inside `src/main.ts`; they are inactive but should be trimmed in a follow-up readability pass.
 
 ## Known issues
 
-- Build chunk > 500 kB warning (Three + Rapier WASM). Defer.
-- Favicon 404 (cosmetic).
-- Cargo chunks can spawn inside an asteroid sphere on glancing high-speed deaths. Mitigated, not eliminated.
-- AI-generated GLBs in `public/ships/` are not wired in. Pipeline supports them but Blender cleanup is deferred.
-- `In progress` is empty; the Phase 2 in-progress marker has been retired.
+- Build chunk > 500 kB warning remains (Three + Rapier WASM). Defer.
+- Favicon 404 remains cosmetic.
+- Controller playtest was not run after the cleanup.
+- Ordinary/weak/strong class ratios, weak gravity scaling, and visual distinction need hands-on course tuning.
+- Course-envelope margin and warning duration need testing on the longest routes.
+- Course tuning remains unverified after the current catalog changes in `src/game/racing/courseCatalog.ts`.
+- Optional Supabase leaderboard SQL/docs may still mention removed Friend Heat tables.
+- `dist/` may be regenerated by builds and remains ignored.
 
 ## Next actions
 
-Plan from `docs/plans/2026-05-10 0057 Plan - Rest of game.md` is implemented end-to-end. Remaining backlog (defer-ables, not blockers):
-1. Live-test full loop in browser; rebalance part costs + enemy difficulty after feel pass.
-2. Wire AI GLBs once cleaned up in Blender (manifest path + mount empties).
-3. Damage-state ship visuals at low HP.
-4. Code-split the bundle (dynamic-import Rapier WASM) to silence the 500 kB warning.
+1. Controller-playtest fresh launch, manual retry, crash recovery, pause/reconnect, course loss, finish, and results.
+2. Tune ordinary/weak/strong asteroid ratios and visual readability across every course.
+3. Trim inactive Friend Heat/field-notes/invalid CSS from `src/main.ts`.
+4. Update or split `docs/database/supabase-racing.sql` so it only documents retained leaderboard support.
+5. Tune course clearance, course-envelope margins, asteroid density, and medal times after hands-on runs.
+6. Add debug visibility for route corridor and course-envelope volumes if controller playtesting needs it.
 
 ## Active plan
 
-docs/plans/2026-05-10 0057 Plan - Rest of game.md
+`docs/plans/2026-06-07 2125 Plan - Slingshot Recovery Cleanup.md` remains active for follow-up playtest, CSS/docs cleanup, and debug-visibility work.
 
 ## Recent logs
-- docs/log/2026-05-10 0057 Rest of game.md - comprehensive plan + session 2 polish (asteroid fix, enemy tuning, lock-on, skybox, camera toggle)
-- docs/log/2026-05-09 2136 Browser thrust and creak pass.md - verified boost plumes with Playwright, anchored plume geometry, gated creak by pull, and mapped gamepad X to ship cycling
-- docs/log/2026-05-09 2126 Directional thrust visuals.md - added directional ship plume feedback for forward, boost, reverse, and strafe thrust
-- docs/plans/2026-05-09 1921 Plan - Slingshot feel.md - sharpened wells, cube-scaled mass, core ramp, well-aware speed assist
-- docs/log/2026-05-09 1907 Ship asset pipeline.md - documented kit/full-model/primitive ship visual pipeline and future ship-builder direction
-- docs/log/2026-05-09 1908 Background sun fix.md - moved visible sun from reachable world mesh into the sky dome shader
-- docs/log/2026-05-09 1854 Lighting polish.md - added concept-inspired deep-field lighting, bloom, local emissive accents, and asteroid glints
-- docs/log/2026-05-09 1840 Ship variants and boost.md - added concept-inspired ship variants, ship selector, and thrust-mapped boost visuals
-- docs/log/2026-05-09 1831 Apply 03 defaults.md - promoted `Blake/config-values/03.json` tuning values into source defaults
-- docs/log/2026-05-09 1820 Tuning per-value reset.md - added hover-only per-value default reset buttons to modified tuning controls
-- docs/log/2026-05-09 1730 Phase 2 feel-test.md - Phase 2 verdict: loop is fun, Phase 3 earned
-- docs/log/2026-05-09 1059 Phase 2 M1-M5 implementation.md - M1-M5 implemented; ship art + attachment points
-- docs/log/2026-05-09 1047 Phase 2 kickoff.md - Phase 2 plan written, implementation begun
-- docs/log/2026-05-09 0110 Look-only right stick.md - controller right stick is camera-only
-- docs/log/2026-05-09 0106 Ship-relative camera controls.md - chase camera inherits ship orientation
-- docs/log/2026-05-09 0058 Controls tuning.md - 6DOF controls + brake damping + overspeed assist
-- docs/log/2026-05-09 0054 M2-M5 gravity field.md - Phase 1 M2-M5 features
-- docs/log/2026-05-08 2318 M1 free flight.md - Phase 1 M1 ship rigid body + camera + input
-- docs/log/2026-05-08 2251 Kickoff.md - project kickoff + Phase 1 plan
+
+- docs/log/2026-06-18 0027 Claude spec improvements.md - promoted the authoritative spec and added retry-ready starts, gravity classes, defensive recovery, and strong-well feedback; build and browser smoke test passed
+- docs/log/2026-06-07 2156 Recovery cleanup.md - removed inactive legacy systems and draft ship binaries, simplified the active UI/runtime path, made asteroid generation route-aware for start/gate/visual corridor trust, and build-checked
+- docs/log/2026-06-06 0306 Slingshot polish pass.md - previous polish pass before recovery cleanup
+- docs/log/2026-06-06 0222 Traverse variants.md - added Far Wake Run, Iron Meridian, and Blackglass Crossing as additional large point-to-point maps using the visual/gameplay asteroid split; build-checked

@@ -7,7 +7,7 @@ _Scope: single-player only, light combat, primitives + kit-built ships (no AI GL
 
 ## Context
 
-Phase 1 (gravity feel) and Phase 2 (run loop: mining, energy, base, scatter, boost, audio, tuning) shipped and feel fun. State.md confirms loop is fun, Phase 3 earned. User wants the rest of the game implemented in one comprehensive pass — no more phase-gates. Vision (`docs/spec/gravity-game-vision.md`), story (`docs/spec/slingshot-story-spec.md`), and ship-asset pipeline (`docs/spec/ship-asset-pipeline.md`) define the target. This plan covers everything from current state to a complete shippable single-player game.
+Phase 1 (gravity feel) and Phase 2 (run loop: mining, energy, base, scatter, boost, audio, tuning) shipped and feel fun. State.md confirms loop is fun, Phase 3 earned. User wants the rest of the game implemented in one comprehensive pass — no more phase-gates. Vision (`docs/spec/archive/gravity-game-vision.md`), story (`docs/spec/archive/slingshot-story-spec.md`), and ship-asset pipeline (`docs/spec/archive/ship-asset-pipeline.md`) define the target. This plan covers everything from current state to a complete shippable single-player game.
 
 User confirmed: single-player only, light combat, kit-built ship-builder is core, AI GLBs deferred until cleaned.
 
@@ -32,7 +32,7 @@ End state: player launches → mines deep field → fights/dodges enemies → re
 ## Architecture decisions
 
 - Keep `Ship` gameplay API stable. Visual swap is a `ShipVisualResolver` injected at construction + cycle. `Ship` exposes `attachments` keyed by `AttachmentName` regardless of visual source.
-- Manifest format = JSON in `public/assets/ships/kits/*.ship.json` with `parts[]` referencing `public/assets/ships/kits/parts/...glb`. Schema per `docs/spec/ship-asset-pipeline.md` §"Ship Definition Shape".
+- Manifest format = JSON in `public/assets/ships/kits/*.ship.json` with `parts[]` referencing `public/assets/ships/kits/parts/...glb`. Schema per `docs/spec/archive/ship-asset-pipeline.md` §"Ship Definition Shape".
 - Persistence = `localStorage` key `slingshot.save.v1`. Versioned. Reset on schema bump.
 - Combat shares the same `physics.world`; projectiles are dynamic Rapier bodies with kinematic contact filtering and gravity-acceleration applied each tick (curves in wells naturally).
 - Upgrades are data-driven (`UPGRADE_DEFS`) and mount via `Ship.attachments[name]`. Each upgrade has a primitive procedural visual until kit parts replace it.

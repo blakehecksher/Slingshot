@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { AsteroidGravityClass } from './asteroids';
 
 type HapticGamepad = Gamepad & {
   vibrationActuator?: {
@@ -112,5 +113,58 @@ export class GravityFeedback {
 
   get level(): number {
     return this.intensity;
+  }
+}
+
+export interface SlingshotEvent {
+  readonly speedGain: number;
+  readonly intensity: number;
+}
+
+export class SlingshotFeedbackDetector {
+  private armed = false;
+  private entrySpeed = 0;
+  private peakPull = 0;
+  private releaseSec = 0;
+
+  reset(): void {
+    this.armed = false;
+    this.entrySpeed = 0;
+    this.peakPull = 0;
+    this.releaseSec = 0;
+  }
+
+  update(
+    gravityClass: AsteroidGravityClass | null,
+    pull: number,
+    clearance: number,
+    speed: number,
+    dt: number,
+  ): SlingshotEvent | null {
+    const inStrongPass = gravityClass === 'strong' && pull >= 4 && clearance < 320;
+    if (inStrongPass) {
+      if (!this.armed) {
+        this.armed = true;
+        this.entrySpeed = speed;
+        this.peakPull = pull;
+      } else {
+        this.peakPull = Math.max(this.peakPull, pull);
+      }
+      this.releaseSec = 0;
+      return null;
+    }
+
+    if (!this.armed) return null;
+    this.releaseSec += dt;
+    if (this.releaseSec < 0.16) return null;
+
+    const speedGain = speed - this.entrySpeed;
+    const peakPull = this.peakPull;
+    this.reset();
+    if (speedGain < 12 || peakPull < 6) return null;
+    return {
+      speedGain,
+      intensity: Math.max(0.25, Math.min(1, speedGain / 90 + peakPull / 80)),
+    };
   }
 }

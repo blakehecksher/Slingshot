@@ -95,3 +95,141 @@ Supersedes: none
 Decision: Hangar UI is a DOM overlay. Opening it freezes the player ship and short-circuits `tickPhysics`. Only valid while inside the base trigger sensor.
 Reason: A ship-builder mid-flight invites accidental triggers. Coupling it to docking matches the fiction ("dock at base"). DOM overlay avoids spinning a second 3D scene; a small Three.js renderer inside the overlay handles only the live preview.
 Supersedes: none
+
+## 2026-05-10 1755 - Racing branch uses standardized ordered circuits
+
+Decision: The `racing-time-trials` branch makes ordered checkpoint circuits the primary mode and keeps mining, combat, hangar upgrades, and cargo economy inactive in the entrypoint.
+Reason: Comparable time-trial runs need the same objective order, same ship baseline, and no economy or combat interruptions.
+Supersedes: none
+
+## 2026-05-10 1755 - Race leaderboards are local-first
+
+Decision: Store race bests, recent runs, splits, and ghosts in `localStorage["slingshot.racing.save.v1"]`, with a `LeaderboardProvider` interface and Supabase stub for later shared leaderboards.
+Reason: Local persistence makes the branch playable immediately without backend setup while preserving a clear remote-adapter boundary.
+Supersedes: none
+
+## 2026-05-10 1755 - Ghosts are fixed-interval transform samples
+
+Decision: Record previous-best ghosts as fixed-interval ship transform samples: race time, position, quaternion, speed, and checkpoint index.
+Reason: Transform playback is deterministic enough for visual racing, compact enough for localStorage, and does not touch physics or require input re-simulation.
+Supersedes: none
+
+## 2026-05-10 2131 - Deploy racing branch to GitHub Pages
+
+Decision: GitHub Pages deploys from pushes to `racing-time-trials` instead of `main`.
+Reason: `main` should remain available as its own development branch while the racing time-trials version is the public deployed build.
+Supersedes: 2026-05-08 2251 - Hosting: GitHub Pages via official Actions
+
+## 2026-05-14 2347 - Time-trial product outline is current scope
+
+Decision: Use `docs/spec/slingshot-time-trials-product-outline.md` as the current product outline. Focus the game on fast course entry, gravity racing, timers/splits, ghosts, leaderboards, results, HUD readability, settings, and light player identity. Defer ship selection, hangar hub, upgrades, mining, economy, combat, and story progression as active product pillars.
+Reason: The strongest near-term game is the replayable gravity time-trial loop. Ship/hangar/economy systems add design weight before the core racing loop is proven and polished.
+Supersedes: none
+
+## 2026-05-14 2355 - Lore and aesthetics stay active
+
+Decision: Keep `docs/spec/slingshot-lore-and-visual-direction.md` in the root spec folder as the active lore and aesthetic companion to the time-trial product outline.
+Reason: The racing loop should be developed with clear tone, visual language, naming, and Dead Iron fiction in mind, while keeping mining/economy/story systems deferred as gameplay pillars.
+Supersedes: none
+
+## 2026-05-17 2127 - Friend Heat mode shape
+
+Decision: Future Friend Heat multiplayer should use invite-code private lobbies, a shared heat timer, and a lobby-best ghost that starts with the first valid completed lobby run and updates only at the start of a player's next attempt. The first version should not show personal-best ghosts or global top-board ghosts inside the heat. Once the heat timer expires, existing attempts may finish and count, but no new attempts can start. Valid Friend Heat completions still submit to personal records and the global leaderboard.
+Reason: This preserves the feeling of a private friend race without discouraging players with an outside global top ghost, avoids confusing mid-attempt ghost swaps, and still lets excellent heat runs become public leaderboard records.
+Supersedes: none
+
+## 2026-05-18 2124 - No separate race setup or ghost results branch
+
+Decision: Remove the separate race setup screen from the active flow and keep results limited to Retry and Title Board actions. Results should show final time, personal-best time and delta, player leaderboard time and delta, number-one leaderboard time and delta, plus split details.
+Reason: The active loop should be fast and visually consistent with the title/course board. Separate ghost/result branches and setup overlays slow the loop and create confusing screens.
+Supersedes: none
+
+## 2026-05-21 2335 - Tutorial onboarding course shape
+
+Decision: Put tutorial onboarding maps at the top of the normal course board, keep all courses unlocked, and teach with short non-pausing prompts during uncompleted tutorial runs.
+Reason: New players need a clearer first-run path without adding a separate campaign mode or slowing the existing time-trial loop.
+Supersedes: none
+
+## 2026-05-22 0018 - Controller flight defaults
+
+Decision: Default controller flight should target arcade-racing feel: left stick controls ship pitch/roll, right stick controls camera free-look, triggers control thrust/brake, bumpers boost, and D-pad remains secondary strafe. Keep leaderboard sharing unchanged for this pass because the baseline control model changes globally rather than adding optional assist classes.
+Reason: The prior right-stick yaw/vertical-strafe mapping made one thumb handle two unrelated jobs and contributed to poor controller feel. The racing loop needs recoverable, readable gravity flight before deeper physics rewrites or assist categories.
+Supersedes: none
+
+## 2026-05-22 0038 - Stick-throttle controller trial
+
+Decision: Trial a controller layout where left stick Y controls forward/reverse thrust, left stick X controls lateral strafe, right stick controls pitch/roll, LT/RT control analog yaw, LB/RB remain boost, and D-pad remains secondary strafe.
+Reason: Hands-on play found the prior arcade-racing layout still felt wrong. This trial separates translation/throttle from attitude control while preserving analog yaw and boost access for gravity racing.
+Supersedes: 2026-05-22 0018 - Controller flight defaults
+
+## 2026-05-22 0043 - Trigger roll controller trial
+
+Decision: Revise the stick-throttle controller trial so left stick Y controls forward/reverse thrust, left stick X controls lateral strafe, right stick controls pitch/yaw, LT/RT control analog roll, LB/RB remain boost, and D-pad remains secondary strafe.
+Reason: Hands-on controller feedback found RT/LT should be roll, while right stick should own pitch/yaw. This keeps translation on the left thumb and moves primary attitude aiming onto the right thumb.
+Supersedes: 2026-05-22 0038 - Stick-throttle controller trial
+
+## 2026-05-22 0049 - Configurable controller flight map
+
+Decision: Expose controller flight-axis mapping in Settings. Players can cycle left stick X/Y, right stick X/Y, LT, and RT through pitch, yaw, roll, lateral/vertical strafe, thrust, inverted variants, or disabled. The default keeps left stick thrust/strafe, right stick pitch/yaw with yaw inverted from the previous trial, and LT/RT roll.
+Reason: Repeated fixed controller trials still felt wrong in hands-on play. The fastest path to a good feel is letting the player remap axes in-game while preserving the shaped input and flight-assist stack.
+Supersedes: 2026-05-22 0043 - Trigger roll controller trial
+
+## 2026-06-05 2046 - Restore fixed controller baseline
+
+Decision: Remove the configurable controller flight map and restore the fixed baseline ship controls: left stick pitch/roll, right stick yaw/up-down, D-pad strafe, RT/LT thrust/reverse, and LB/RB boost.
+Reason: The remap experiments were not a good ship default for this branch, and the safest ship-ready base is the committed baseline controls while the course and tutorial work stays intact.
+Supersedes: 2026-05-22 0049 - Configurable controller flight map
+
+## 2026-06-05 2205 - Restore prior baseline controls
+
+Decision: Revert the left-translation / right-rotation experiment and return to the prior baseline ship controls: left stick pitch/roll, right stick yaw/up-down, D-pad strafe, RT/LT thrust/reverse, and LB/RB boost.
+Reason: The split mapping was not the intended controller feel for this branch, and reverting restores the previous ship-ready baseline while keeping the course and tutorial work intact.
+Supersedes: 2026-06-05 2046 - Restore fixed controller baseline
+
+## 2026-06-06 0143 - Reset active courses to claim-field racing
+
+Decision: Archive prior lab, tutorial, Dead Iron Sweep, and Black Core Run courses out of the active course board. Keep Claim Shakedown active, add three Claim Shakedown-style variants, and prototype a much larger point-to-point Claim Traverse course.
+Reason: Hands-on dissatisfaction points to the current course stack feeling too much like exercises. The next direction should test larger claim-field racing, short Shakedown-like variations, and a bigger point-A-to-point-B sprint with denser asteroid fields.
+Supersedes: none
+
+## 2026-06-06 0204 - Split visual asteroid density from gameplay asteroids
+
+Decision: Dense-course asteroid counts should separate real gameplay asteroids from visual-only asteroid density. Gameplay asteroids create meshes, Rapier colliders, gravity mass, trajectory influence, and minimap entries. Visual-only asteroids render through an instanced mesh and do not affect physics, gravity, trajectory prediction, or minimap sampling.
+Reason: Claim Traverse proved that thousands of real asteroids are too expensive for a large point-to-point course. The game needs the visual feeling of dense claim space without forcing every background rock into the simulation.
+Supersedes: none
+
+## 2026-06-07 0004 - Remove in-race minimap
+
+Decision: Remove the persistent in-race minimap from the active racing build and product spec. Keep trajectory prediction available for debug/tuning and any lower-cost in-world guidance, but do not treat a separate minimap render as core HUD.
+Reason: The minimap adds an extra render pass and HUD complexity while providing limited function in the current gate-racing loop. Gates, ghosts, the course guide line, field feedback, and optional debug trajectory cues carry the useful navigation/readability work with less runtime and visual cost.
+Supersedes: minimap-as-core guidance in active spec and earlier minimap-specific implementation notes.
+
+## 2026-06-07 2156 - Recovery cleanup removes legacy active systems
+
+Decision: Treat the active build as a focused asteroid time-trial racing fork. Remove mining, economy/cargo, hangar/upgrades, weapons/combat/enemies, pickups, Friend Heat, draft ship binaries, and ship-builder support from the active source path. Keep one procedural racing ship, course board, race loop, asteroid fields, gates, crash/restart, results, settings, local records/ghosts, and optional shared leaderboard support.
+Reason: The broad prototype systems were no longer serving the current racing loop and kept directing future work toward inactive mechanics. The cleanup makes asteroid trust and course racing the primary code path.
+Supersedes: Friend Heat active implementation notes and prior hangar/economy/combat prototype direction for this branch.
+
+## 2026-06-18 0010 - Retries launch on thrust without another countdown
+
+Decision: Keep the three-second countdown for fresh course-board launches. Manual restart, results Retry, crash recovery, and out-of-bounds recovery reset the full run at the start gate, then wait in a frozen ready state until the first meaningful thrust input starts the timer and ship.
+Reason: Time-trial practice involves frequent repetition. Removing the repeated countdown shortens the retry loop while preserving a clear initial launch and clean-run leaderboard rules.
+Supersedes: fresh countdown after every crash/restart in the active implementation.
+
+## 2026-06-18 0010 - Asteroids use ordinary, weak, and strong gravity classes
+
+Decision: Classify gameplay asteroids as ordinary, weak Dead Iron, or strong Dead Iron. Ordinary rocks collide but exert no gravity; weak rocks exert reduced pull; strong rocks use full tuned pull. Authored gravity anchors are always strong, and each class must have distinct material and seam language.
+Reason: The player must be able to read which rocks shape the racing line before relying on HUD/audio warnings. A three-level hierarchy preserves field density while making gravity legible.
+Supersedes: every gameplay asteroid acting as a full gravity source.
+
+## 2026-06-18 0010 - Defensive race recovery preserves clean-run timing
+
+Decision: Automatically pause active attempts when the tab becomes hidden or a controller disconnects. Treat leaving the computed course envelope as a warned course loss that resets the whole attempt into the thrust-to-launch ready state.
+Reason: Lost focus, lost input, and flying irrecoverably away should resolve clearly without introducing checkpoint penalties, teleports inside ranked ghosts, or ambiguous partial runs.
+Supersedes: no explicit controller-disconnect pause and no active out-of-bounds recovery.
+
+## 2026-06-18 0010 - Strong-well passes receive distinct release feedback
+
+Decision: Strong wells drive a restrained screen treatment while under pull. Exiting a strong-well pass with meaningful speed gain triggers a dedicated whoosh, short visual pulse, and speed-gain callout.
+Reason: The gravity assist is the central reward event and should feel different from ordinary speed, boost, or generic proximity danger.
+Supersedes: none.

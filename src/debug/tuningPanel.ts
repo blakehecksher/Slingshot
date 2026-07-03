@@ -2,253 +2,290 @@ import GUI, { type Controller } from 'lil-gui';
 import * as THREE from 'three';
 import { AUDIO_TUNING, type GameAudio } from '../audio/audio';
 import { ASTEROID_TUNING, AsteroidField } from '../game/asteroids';
-import { BASE_TUNING } from '../game/base';
-import { ECONOMY_TUNING } from '../game/economy';
-import { ENEMY_TUNING } from '../game/enemies';
 import { ENERGY_TUNING } from '../game/energy';
 import { FEEDBACK_TUNING } from '../game/feedback';
 import { GRAVITY_TUNING } from '../game/gravity';
+import { isTextInputTarget } from '../game/input';
 import { LIFECYCLE_TUNING } from '../game/lifecycle';
-import { PICKUP_TUNING, PickupSystem } from '../game/pickups';
-import { SHIP_TUNING, SHIP_VARIANTS, SHIP_VISUALS, type Ship, type ShipVariantId } from '../game/ship';
-import { WEAPON_TUNING } from '../game/weapons';
-import { ZONE_TUNING } from '../game/zones';
+import { RACE_TIME_TUNING } from '../game/racing/raceManager';
+import { SHIP_TUNING, type Ship } from '../game/ship';
+import type { DebugViz } from './debugViz';
+import {
+  applyTuning,
+  clearSavedTuning,
+  saveTuning,
+  type TuningGroupKey,
+  type TuningSnapshot,
+} from './tuningStore';
 
 const LIVE = {
-  fps: 0, speed: 0, cargo: 0, bank: 0, energy: 0,
-  mineRate: 0, pull: 0, clearance: 0, state: 'alive',
+  fps: 0,
+  speed: 0,
+  energy: 0,
+  pull: 0,
+  clearance: 0,
+  timeScale: 1,
+  state: 'select',
 };
 
 export interface LiveReadout {
-  fps: number; speed: number; cargo: number; bank: number; energy: number;
-  mineRate: number; pull: number; clearance: number; state: string;
+  fps: number;
+  speed: number;
+  energy: number;
+  pull: number;
+  clearance: number;
+  timeScale: number;
+  state: string;
 }
 
 export interface TuningPanelDeps {
   ship: Ship;
   field: AsteroidField;
-  pickups: PickupSystem;
   audio: GameAudio;
   spawnPos: THREE.Vector3;
+  /** The in-source recovery baseline captured at boot, before saved overrides. */
+  baseline: TuningSnapshot;
+  debugViz: DebugViz;
   onToast: (msg: string, durationMs: number) => void;
 }
 
-// Shallow clone — all TUNING objects are flat scalar maps.
-function snapshot<T extends Record<string, unknown>>(obj: T): T {
-  return { ...obj };
-}
-
-type TuningGroupKey =
-  | 'SHIP_TUNING'
-  | 'GRAVITY_TUNING'
-  | 'ECONOMY_TUNING'
-  | 'ENERGY_TUNING'
-  | 'LIFECYCLE_TUNING'
-  | 'ASTEROID_TUNING'
-  | 'PICKUP_TUNING'
-  | 'BASE_TUNING'
-  | 'AUDIO_TUNING'
-  | 'FEEDBACK_TUNING'
-  | 'WEAPON_TUNING'
-  | 'ENEMY_TUNING'
-  | 'ZONE_TUNING';
-
 type TunableRecord = Record<string, number>;
+
+const DEBUG_FLAGS = {
+  hitboxes: false,
+  gravityGradient: false,
+  wireframe: false,
+};
+
+// Plain-English hover docs, keyed by tuning property. Shown as a native tooltip
+// on the param name. One line, what it actually does + which way to push it.
+const PARAM_DOCS: Record<string, string> = {
+  // Gravity / sling feel
+  G: 'Master gravity strength. Higher = every asteroid pulls harder, tighter slingshot curves.',
+  CORE_BOOST_PEAK: 'Extra pull multiplier right at an asteroid surface. Higher = dense cores yank much harder on a close pass.',
+  CORE_BOOST_RANGE_FRAC: 'How far out (as a fraction of radius) the close-pass pull spike begins. Higher = the strong pull reaches further from the rock.',
+  DANGER_RANGE: 'Clearance distance where the HUD/danger warning starts escalating. Raise this for bigger rocks.',
+  SOFTENING_FACTOR: 'Smooths gravity very close to a rock so pull does not spike to infinity. Higher = gentler near the surface.',
+  MIN_SOFTENING: 'Floor for the softening above, in metres. Higher = softer minimum even for tiny rocks.',
+  DEAD_IRON_TIME_PULL_REF: 'Dead Iron pull that earns the full clock-slow reward. Lower = time slows more easily.',
+  DEAD_IRON_MIN_TIME_SCALE: 'Fastest the scored clock can run in a strong Dead Iron well. Lower = bigger time reward.',
+  WEAK_DEAD_IRON_TIME_MULT: 'Fraction of the strong-well time reward weak Dead Iron can earn.',
+  // Ship / sling feel
+  SPEED_ASSIST_PULL_SUPPRESS_LO: 'At high speed, gravity pull is damped. This is the gentle floor of that damping — low values keep more throw when fast.',
+  SPEED_ASSIST_PULL_SUPPRESS_HI: 'Upper limit of high-speed pull damping. LOWER this if you "zoom past" rocks without feeling thrown.',
+  FORWARD_THRUST: 'Main engine push. Higher = faster acceleration and top speed.',
+  REVERSE_THRUST: 'Reverse / brake-thrust push.',
+  STRAFE_THRUST: 'Sideways and vertical strafe push.',
+  FORWARD_THRUST_BIAS: 'Balances forward vs reverse authority.',
+  MAX_PITCH_RATE: 'Max nose up/down turn speed.',
+  MAX_YAW_RATE: 'Max left/right turn speed.',
+  MAX_ROLL_RATE: 'Max barrel-roll speed.',
+  BRAKE_DAMPING: 'How hard the brake bleeds off velocity. Higher = stops quicker.',
+  BOOST_THRUST_MULT: 'Thrust multiplier while boosting.',
+  BOOST_ENERGY_MULT: 'How fast boosting drains the energy cell.',
+  SPEED_ASSIST_START: 'Speed (m/s) where flight assist begins easing control.',
+  SPEED_ASSIST_FULL: 'Speed (m/s) where flight assist is fully applied.',
+  SPEED_ASSIST_DAMPING: 'Strength of the high-speed control assist.',
+  // Asteroids
+  PROCEDURAL_COUNT: 'How many real (collidable, gravity-bearing) asteroids spawn.',
+  RADIUS_MIN: 'Smallest possible asteroid radius (metres). Raise to shift the whole field bigger.',
+  RADIUS_RANGE: 'Added size span on top of the minimum. Raise for much larger rocks — this is the main "scale up" knob.',
+  RADIUS_POWER: 'Size distribution curve. Higher = mostly small rocks with rare giants; lower = more medium/large.',
+  SPHERE_INNER: 'Clear bubble radius around spawn — no rocks closer than this.',
+  SPHERE_OUTER: 'Outer edge of the asteroid shell.',
+  RADIAL_BIAS: 'Packs rocks inward (<1) or outward (>1).',
+  SIZE_INNER_MAX: 'Caps how big inner-shell rocks can get (fraction of full range). Keeps giants out in the deep field.',
+  MASS_COEF: 'Density coefficient: scales mass (and therefore gravity pull) for every rock. Raise for "massive grav pull" at the same size.',
+  MASS_RADIUS_POWER: 'How steeply mass grows with radius (mass = radius^this). 3 = realistic volume scaling.',
+  DRIFT_MIN: 'Minimum slow drift speed of asteroids.',
+  DRIFT_RANGE: 'Added random drift speed range.',
+  CORE_DENSITY_MIN: 'Minimum core density (denser = heavier = pulls harder).',
+  CORE_DENSITY_RANGE: 'Random density span added on top.',
+  // Boost energy
+  ENERGY_MAX: 'Boost cell capacity.',
+  THRUST_COST_PER_SEC: 'Base energy drain per second of thrust.',
+  RESERVE_THRESHOLD_FRAC: 'Fraction of the cell that becomes a low-power reserve.',
+  RESERVE_THRUST_SCALE: 'Thrust available while running on reserve.',
+  // Crash / respawn
+  GRAZE_VELOCITY_DAMP: 'On a low-speed graze, velocity is scaled by this. Lower = grazes bleed more speed.',
+  DEATH_SPEED_THRESHOLD: 'Impact speed above which a hit kills instead of grazes. Raise to survive harder bumps.',
+  DEATH_FADE_MS: 'Black-out fade time on death (main game only).',
+  RESPAWN_FADE_MS: 'Fade-back-in time on respawn (main game only).',
+  INVULN_AFTER_RESPAWN_MS: 'Invulnerable grace window after respawn.',
+  // Feedback / audio
+  JERK_THRESHOLD: 'Acceleration-change level before shake/rumble kicks in.',
+  JERK_REF: 'Reference jerk used to normalise shake intensity.',
+  SHAKE_AMP: 'Camera shake amplitude.',
+  HAPTIC_MIN: 'Minimum controller rumble level.',
+  HAPTIC_INTERVAL: 'Rumble pulse spacing.',
+  MASTER_VOLUME: 'Overall audio volume.',
+  RUMBLE_VOLUME: 'Low-frequency engine rumble volume.',
+  CREAK_VOLUME: 'Hull-stress creak volume under heavy gravity.',
+  FADE_TAU: 'Audio fade smoothing time constant.',
+};
 
 export class TuningPanel {
   private gui: GUI;
   private visible = true;
   private refreshResetButtons: Array<() => void> = [];
-
-  // Snapshots taken at construction so "Reset" restores the original defaults.
-  private defaults = {
-    SHIP_TUNING: snapshot(SHIP_TUNING),
-    GRAVITY_TUNING: snapshot(GRAVITY_TUNING),
-    ECONOMY_TUNING: snapshot(ECONOMY_TUNING),
-    ENERGY_TUNING: snapshot(ENERGY_TUNING),
-    LIFECYCLE_TUNING: snapshot(LIFECYCLE_TUNING),
-    ASTEROID_TUNING: snapshot(ASTEROID_TUNING),
-    PICKUP_TUNING: snapshot(PICKUP_TUNING),
-    BASE_TUNING: snapshot(BASE_TUNING),
-    AUDIO_TUNING: snapshot(AUDIO_TUNING),
-    FEEDBACK_TUNING: snapshot(FEEDBACK_TUNING),
-    WEAPON_TUNING: snapshot(WEAPON_TUNING),
-    ENEMY_TUNING: snapshot(ENEMY_TUNING),
-    ZONE_TUNING: snapshot(ZONE_TUNING),
-  };
+  private baseline: TuningSnapshot;
+  private deps: TuningPanelDeps;
+  private regenTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(deps: TuningPanelDeps) {
+    this.deps = deps;
+    this.baseline = deps.baseline;
     TuningPanel.injectResetStyles();
 
-    this.gui = new GUI({ title: 'Tuning   (P to toggle)', width: 340 });
+    this.gui = new GUI({ title: 'Tuning   (P to toggle)', width: 360 });
     this.gui.domElement.style.zIndex = '100';
     this.gui.domElement.style.top = '40px';
 
-    const actions = this.gui.addFolder('Actions');
-    actions.add({ fn: () => this.copyToClipboard(deps.onToast) }, 'fn').name('Copy values to clipboard');
-    actions.add({ fn: () => this.resetToDefaults(deps.onToast) }, 'fn').name('Reset to defaults');
-    actions.add({ fn: () => this.regenerate(deps) }, 'fn').name('Regenerate field + pickups');
-    actions.open();
+    this.buildActions();
+    this.buildLiveReadouts();
+    this.buildSlingFeel();
+    this.buildAsteroids();
+    this.buildShip();
+    this.buildBoostEnergy();
+    this.buildCrashRespawn();
+    this.buildDebugViz();
+    this.buildAdvanced();
 
+    window.addEventListener('keydown', (e) => {
+      if (isTextInputTarget(e.target)) return;
+      if (e.code === 'KeyP' && !e.repeat) this.toggle();
+    });
+  }
+
+  // --- Folders ----------------------------------------------------------------
+
+  private buildActions(): void {
+    const actions = this.gui.addFolder('Actions');
+    actions.add({ fn: () => this.saveAsDefaults() }, 'fn').name('💾 Save as defaults');
+    actions.add({ fn: () => this.resetToBaseline() }, 'fn').name('↺ Reset to baseline');
+    actions.add({ fn: () => this.clearSaved() }, 'fn').name('🗑 Clear saved defaults');
+    actions.add({ fn: () => this.copyToClipboard() }, 'fn').name('Copy values (JSON)');
+    actions.add({ fn: () => this.regenerate() }, 'fn').name('Regenerate asteroid field');
+    actions.open();
+  }
+
+  private buildLiveReadouts(): void {
     const live = this.gui.addFolder('Live readouts');
     live.add(LIVE, 'fps').listen().disable().name('fps');
     live.add(LIVE, 'speed').listen().disable().name('speed m/s');
     live.add(LIVE, 'pull').listen().disable().name('gravity pull');
     live.add(LIVE, 'clearance').listen().disable().name('clearance m');
-    live.add(LIVE, 'cargo').listen().disable().name('cargo kg');
-    live.add(LIVE, 'bank').listen().disable().name('bank kg');
+    live.add(LIVE, 'timeScale').listen().disable().name('clock scale');
     live.add(LIVE, 'energy').listen().disable().name('energy %');
-    live.add(LIVE, 'mineRate').listen().disable().name('mining kg/s');
-    live.add(LIVE, 'state').listen().disable().name('lifecycle');
+    live.add(LIVE, 'state').listen().disable().name('race state');
     live.open();
+  }
 
+  // The params that actually shape sling feel, pulled to the top across groups.
+  private buildSlingFeel(): void {
+    const f = this.gui.addFolder('Sling feel');
+    this.addTunable(f, 'GRAVITY_TUNING', GRAVITY_TUNING, 'G', 0, 0.6, 0.001);
+    this.addTunable(f, 'GRAVITY_TUNING', GRAVITY_TUNING, 'CORE_BOOST_PEAK', 0, 16, 0.05);
+    this.addTunable(f, 'GRAVITY_TUNING', GRAVITY_TUNING, 'CORE_BOOST_RANGE_FRAC', 0, 6, 0.05);
+    this.addTunable(f, 'GRAVITY_TUNING', GRAVITY_TUNING, 'DANGER_RANGE', 50, 2500, 5);
+    this.addTunable(f, 'RACE_TIME_TUNING', RACE_TIME_TUNING, 'DEAD_IRON_TIME_PULL_REF', 1, 80, 0.5);
+    this.addTunable(f, 'RACE_TIME_TUNING', RACE_TIME_TUNING, 'DEAD_IRON_MIN_TIME_SCALE', 0.1, 1, 0.01);
+    this.addTunable(f, 'RACE_TIME_TUNING', RACE_TIME_TUNING, 'WEAK_DEAD_IRON_TIME_MULT', 0, 1, 0.01);
+    // High-speed pull suppression — the likely culprit when you "zoom past" rocks.
+    this.addTunable(f, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_PULL_SUPPRESS_LO', 0, 40, 0.1);
+    this.addTunable(f, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_PULL_SUPPRESS_HI', 0.5, 120, 0.1);
+    this.addTunable(f, 'SHIP_TUNING', SHIP_TUNING, 'FORWARD_THRUST', 5, 2000, 1);
+    this.addTunable(f, 'LIFECYCLE_TUNING', LIFECYCLE_TUNING, 'DEATH_SPEED_THRESHOLD', 1, 120, 0.5);
+    f.open();
+  }
+
+  private buildAsteroids(): void {
+    const ast = this.gui.addFolder('Asteroids   (auto-regen)');
+    const live = (c: Controller) => c.onChange(() => this.scheduleRegen());
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'PROCEDURAL_COUNT', 0, 2000, 5));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIUS_MIN', 1, 400, 0.5));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIUS_RANGE', 1, 1500, 1));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIUS_POWER', 0.5, 6, 0.05));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'SPHERE_INNER', 50, 6000, 10));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'SPHERE_OUTER', 1000, 30000, 50));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIAL_BIAS', 0.3, 2.0, 0.05));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'SIZE_INNER_MAX', 0.05, 1.0, 0.01));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'MASS_COEF', 0.5, 400, 0.5));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'MASS_RADIUS_POWER', 1, 4, 0.05));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'WEAK_GRAVITY_CHANCE', 0, 0.8, 0.01));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'STRONG_GRAVITY_CHANCE', 0, 0.4, 0.01));
+    live(this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'WEAK_GRAVITY_MASS_SCALE', 0.02, 0.8, 0.01));
+  }
+
+  private buildShip(): void {
     const ship = this.gui.addFolder('Ship');
-    const shipOptions = Object.fromEntries(
-      Object.entries(SHIP_VARIANTS).map(([id, label]) => [label, id]),
-    ) as Record<string, ShipVariantId>;
-    ship.add(SHIP_VISUALS, 'variant', shipOptions)
-      .name('visual variant')
-      .onChange((variant: ShipVariantId) => {
-        deps.ship.setVariant(variant);
-        deps.onToast(`ship: ${deps.ship.variantName}`, 1200);
-      });
-    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'FORWARD_THRUST', 5, 500, 1);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'REVERSE_THRUST', 5, 500, 1);
-    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'STRAFE_THRUST', 0, 200, 1);
+    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'STRAFE_THRUST', 0, 250, 1);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'FORWARD_THRUST_BIAS', 0.3, 1.5, 0.01);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'MAX_PITCH_RATE', 0.3, 5, 0.05);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'MAX_YAW_RATE', 0.3, 5, 0.05);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'MAX_ROLL_RATE', 0.3, 5, 0.05);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'BRAKE_DAMPING', 0, 8, 0.05);
-    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_START', 30, 500, 1);
-    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_FULL', 60, 800, 1);
-    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_DAMPING', 0, 2, 0.01);
-    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_PULL_SUPPRESS_LO', 0, 20, 0.1);
-    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_PULL_SUPPRESS_HI', 0.5, 60, 0.1);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'BOOST_THRUST_MULT', 1, 8, 0.05);
     this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'BOOST_ENERGY_MULT', 1, 12, 0.1);
-    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'CARGO_THRUST_PENALTY', 0, 2, 0.01);
-    this.addTunable(ship, 'SHIP_TUNING', SHIP_TUNING, 'CARGO_AGILITY_PENALTY', 0, 2, 0.01);
+  }
 
-    const gravity = this.gui.addFolder('Gravity');
-    this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'G', 0, 0.2, 0.001);
-    this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'SOFTENING_FACTOR', 0, 2, 0.01);
-    this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'MIN_SOFTENING', 0, 100, 1);
-    this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'DANGER_RANGE', 50, 600, 5);
-    this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'CORE_BOOST_RANGE_FRAC', 0, 4, 0.05);
-    this.addTunable(gravity, 'GRAVITY_TUNING', GRAVITY_TUNING, 'CORE_BOOST_PEAK', 0, 6, 0.05);
-
-    const econ = this.gui.addFolder('Mining / Cargo');
-    this.addTunable(econ, 'ECONOMY_TUNING', ECONOMY_TUNING, 'CARGO_CAP_KG', 500, 20000, 100);
-    this.addTunable(econ, 'ECONOMY_TUNING', ECONOMY_TUNING, 'MINE_COEF', 0, 0.1, 0.001);
-    this.addTunable(econ, 'ECONOMY_TUNING', ECONOMY_TUNING, 'MINE_EPSILON', 1, 60, 1);
-    this.addTunable(econ, 'ECONOMY_TUNING', ECONOMY_TUNING, 'MAX_RATE_PER_AST', 5, 300, 1);
-    this.addTunable(econ, 'ECONOMY_TUNING', ECONOMY_TUNING, 'MAX_TOTAL_RATE', 10, 500, 1);
-    this.addTunable(econ, 'ECONOMY_TUNING', ECONOMY_TUNING, 'MINING_RANGE', 100, 2000, 10);
-    this.addTunable(econ, 'ECONOMY_TUNING', ECONOMY_TUNING, 'SCATTER_CHUNK_KG', 50, 1500, 10);
-    this.addTunable(econ, 'ECONOMY_TUNING', ECONOMY_TUNING, 'SCATTER_DRIFT_INHERIT', 0, 1, 0.01);
-    this.addTunable(econ, 'ECONOMY_TUNING', ECONOMY_TUNING, 'SCATTER_RAND_VEL', 0, 30, 0.5);
-
-    const energy = this.gui.addFolder('Energy');
+  private buildBoostEnergy(): void {
+    const energy = this.gui.addFolder('Boost energy');
     this.addTunable(energy, 'ENERGY_TUNING', ENERGY_TUNING, 'ENERGY_MAX', 20, 500, 5);
     this.addTunable(energy, 'ENERGY_TUNING', ENERGY_TUNING, 'THRUST_COST_PER_SEC', 0, 30, 0.1);
     this.addTunable(energy, 'ENERGY_TUNING', ENERGY_TUNING, 'RESERVE_THRESHOLD_FRAC', 0, 0.4, 0.01);
     this.addTunable(energy, 'ENERGY_TUNING', ENERGY_TUNING, 'RESERVE_THRUST_SCALE', 0, 1, 0.01);
-    this.addTunable(energy, 'ENERGY_TUNING', ENERGY_TUNING, 'PICKUP_AMOUNT', 5, 200, 1);
+  }
 
-    const life = this.gui.addFolder('Death / Respawn');
-    this.addTunable(life, 'LIFECYCLE_TUNING', LIFECYCLE_TUNING, 'DEATH_SPEED_THRESHOLD', 1, 80, 0.5);
+  private buildCrashRespawn(): void {
+    const life = this.gui.addFolder('Crash / respawn');
     this.addTunable(life, 'LIFECYCLE_TUNING', LIFECYCLE_TUNING, 'GRAZE_VELOCITY_DAMP', 0, 1, 0.01);
-    this.addTunable(life, 'LIFECYCLE_TUNING', LIFECYCLE_TUNING, 'DEATH_FADE_MS', 100, 2500, 50);
-    this.addTunable(life, 'LIFECYCLE_TUNING', LIFECYCLE_TUNING, 'RESPAWN_FADE_MS', 100, 2500, 50);
+    this.addTunable(life, 'LIFECYCLE_TUNING', LIFECYCLE_TUNING, 'DEATH_FADE_MS', 0, 2500, 25);
+    this.addTunable(life, 'LIFECYCLE_TUNING', LIFECYCLE_TUNING, 'RESPAWN_FADE_MS', 0, 2500, 25);
     this.addTunable(life, 'LIFECYCLE_TUNING', LIFECYCLE_TUNING, 'INVULN_AFTER_RESPAWN_MS', 0, 5000, 50);
+  }
 
-    const ast = this.gui.addFolder('Asteroids   (regen to apply)');
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'PROCEDURAL_COUNT', 0, 2000, 5);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIUS_MIN', 1, 80, 0.5);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIUS_RANGE', 1, 250, 1);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIUS_POWER', 0.5, 6, 0.05);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'SPHERE_INNER', 50, 3000, 10);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'SPHERE_OUTER', 1000, 9000, 50);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'RADIAL_BIAS', 0.3, 2.0, 0.05);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'SIZE_INNER_MAX', 0.05, 1.0, 0.01);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'DRIFT_MIN', 0, 5, 0.05);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'DRIFT_RANGE', 0, 5, 0.05);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'ROT_MIN', 0, 0.5, 0.005);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'ROT_RANGE', 0, 0.5, 0.005);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'MASS_COEF', 0.5, 50, 0.5);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'MASS_RADIUS_POWER', 1, 4, 0.05);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'CORE_DENSITY_MIN', 0.1, 2, 0.05);
-    this.addTunable(ast, 'ASTEROID_TUNING', ASTEROID_TUNING, 'CORE_DENSITY_RANGE', 0, 3, 0.05);
+  private buildDebugViz(): void {
+    const viz = this.gui.addFolder('Debug view');
+    const h = viz.add(DEBUG_FLAGS, 'hitboxes').name('show hitboxes').onChange((v: boolean) => this.deps.debugViz.setHitboxes(v));
+    if (h.$name) h.$name.title = 'Wireframe sphere at each asteroid\'s TRUE collision radius. The gap vs the visible rock is your "asteroid trust" issue.';
+    const g = viz.add(DEBUG_FLAGS, 'gravityGradient').name('gravity gradient').onChange((v: boolean) => this.deps.debugViz.setGradient(v));
+    if (g.$name) g.$name.title = 'Point grid around the ship colored by gravity pull (dim = weak, red = strong).';
+    const w = viz.add(DEBUG_FLAGS, 'wireframe').name('wireframe world').onChange((v: boolean) => this.deps.debugViz.setWireframe(v));
+    if (w.$name) w.$name.title = 'Strip the scene to wireframe so you read the sim, not the art.';
+    viz.open();
+  }
 
-    const pk = this.gui.addFolder('Pickups   (regen to apply)');
-    this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'ENERGY_PICKUP_COUNT', 0, 100, 1);
-    this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'ENERGY_RADIUS', 1, 20, 0.5);
-    this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'CARGO_RADIUS', 1, 20, 0.5);
-    this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'ENERGY_TRIGGER_RADIUS', 2, 50, 1);
-    this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'CARGO_TRIGGER_RADIUS', 2, 50, 1);
-    this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'CARGO_DRIFT_DAMPING', 0, 2, 0.01);
-    this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'ENERGY_SEED_X_RANGE', 100, 5000, 50);
-    this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'ENERGY_SEED_Y_RANGE', 50, 2500, 25);
-    this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'ENERGY_SEED_Z_NEAR', -2000, 500, 10);
-    this.addTunable(pk, 'PICKUP_TUNING', PICKUP_TUNING, 'ENERGY_SEED_Z_FAR', -8000, 0, 25);
+  // Everything already dialed in — collapsed so it stays out of the way.
+  private buildAdvanced(): void {
+    const adv = this.gui.addFolder('Advanced');
 
-    const base = this.gui.addFolder('Base   (baked at startup, display only)');
-    base.add(BASE_TUNING, 'TRIGGER_RADIUS').disable();
-    base.add(BASE_TUNING, 'CORE_SIZE').disable();
+    this.addTunable(adv, 'GRAVITY_TUNING', GRAVITY_TUNING, 'SOFTENING_FACTOR', 0, 2, 0.01);
+    this.addTunable(adv, 'GRAVITY_TUNING', GRAVITY_TUNING, 'MIN_SOFTENING', 0, 100, 1);
+    this.addTunable(adv, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_START', 30, 500, 1);
+    this.addTunable(adv, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_FULL', 60, 800, 1);
+    this.addTunable(adv, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_DAMPING', 0, 2, 0.01);
+    this.addTunable(adv, 'ASTEROID_TUNING', ASTEROID_TUNING, 'DRIFT_MIN', 0, 5, 0.05).onChange(() => this.scheduleRegen());
+    this.addTunable(adv, 'ASTEROID_TUNING', ASTEROID_TUNING, 'DRIFT_RANGE', 0, 5, 0.05).onChange(() => this.scheduleRegen());
+    this.addTunable(adv, 'ASTEROID_TUNING', ASTEROID_TUNING, 'CORE_DENSITY_MIN', 0.1, 2, 0.05).onChange(() => this.scheduleRegen());
+    this.addTunable(adv, 'ASTEROID_TUNING', ASTEROID_TUNING, 'CORE_DENSITY_RANGE', 0, 3, 0.05).onChange(() => this.scheduleRegen());
 
-    const fb = this.gui.addFolder('Feedback (shake / haptics)');
+    const fb = adv.addFolder('Feedback');
     this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'JERK_THRESHOLD', 0, 30, 0.1);
     this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'JERK_REF', 1, 200, 1);
-    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'THRUST_OPPOSE_REF', 0.5, 60, 0.5);
-    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'STRESS_RISE_TAU', 0.01, 1, 0.01);
-    this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'STRESS_FALL_TAU', 0.05, 2, 0.01);
     this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'SHAKE_AMP', 0, 0.6, 0.005);
     this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'HAPTIC_MIN', 0, 1, 0.01);
     this.addTunable(fb, 'FEEDBACK_TUNING', FEEDBACK_TUNING, 'HAPTIC_INTERVAL', 0.05, 1, 0.01);
 
-    const wpn = this.gui.addFolder('Weapons / Combat');
-    this.addTunable(wpn, 'WEAPON_TUNING', WEAPON_TUNING, 'PROJECTILE_TTL_SEC', 0.5, 8, 0.1);
-    this.addTunable(wpn, 'WEAPON_TUNING', WEAPON_TUNING, 'PROJECTILE_RADIUS', 0.1, 2, 0.05);
-    this.addTunable(wpn, 'WEAPON_TUNING', WEAPON_TUNING, 'PROJECTILE_DENSITY', 0.001, 0.5, 0.005);
-    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'COUNT', 0, 200, 1);
-    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'ENGAGE_RANGE', 100, 3000, 25);
-    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'FIRE_RANGE', 100, 2000, 25);
-    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'MAX_SPEED', 20, 300, 1);
-    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'HP_MAX', 5, 500, 1);
-    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'BANK_REWARD_KG', 0, 1000, 5);
-    this.addTunable(wpn, 'ENEMY_TUNING', ENEMY_TUNING, 'CARGO_REWARD_KG', 0, 1000, 5);
-
-    const zones = this.gui.addFolder('Zones');
-    this.addTunable(zones, 'ZONE_TUNING', ZONE_TUNING, 'OPEN_RADIUS', 100, 5000, 25);
-    this.addTunable(zones, 'ZONE_TUNING', ZONE_TUNING, 'DEEP_RADIUS', 500, 8000, 25);
-
-    const audio = this.gui.addFolder('Audio');
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'MASTER_VOLUME', 0, 1, 0.01).onChange((v: number) => deps.audio.setMasterVolume(v));
+    const audio = adv.addFolder('Audio');
+    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'MASTER_VOLUME', 0, 1, 0.01).onChange((v: number) => this.deps.audio.setMasterVolume(v));
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'RUMBLE_VOLUME', 0, 2, 0.01);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'RUMBLE_REF_PULL', 0.2, 12, 0.1);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'RUMBLE_CURVE', 0.2, 2, 0.05);
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_VOLUME', 0, 2, 0.01);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_NEAR', 0, 200, 1);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_FAR', 50, 800, 5);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_PULL_MIN', 0, 20, 0.1);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_PULL_FULL', 0, 30, 0.1);
     this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'FADE_TAU', 0.02, 1.5, 0.01);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_PITCH_LOW', 0.5, 1.5, 0.01);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CREAK_PITCH_HIGH', 0.5, 1.5, 0.01);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CARGO_HUM_VOLUME', 0, 1, 0.01);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CARGO_HUM_PITCH_LOW', 30, 400, 1);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'CARGO_HUM_PITCH_HIGH', 30, 600, 1);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_LASER_VOLUME', 0, 1, 0.01);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_HIT_VOLUME', 0, 1, 0.01);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_DESTROY_VOLUME', 0, 1, 0.01);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_PICKUP_VOLUME', 0, 1, 0.01);
-    this.addTunable(audio, 'AUDIO_TUNING', AUDIO_TUNING, 'SFX_DEPOSIT_VOLUME', 0, 1, 0.01);
-
-    window.addEventListener('keydown', (e) => {
-      if (e.code === 'KeyP' && !e.repeat) this.toggle();
-    });
   }
+
+  // --- Lifecycle --------------------------------------------------------------
 
   toggle(): void {
     this.visible = !this.visible;
@@ -258,15 +295,30 @@ export class TuningPanel {
   update(r: LiveReadout): void {
     LIVE.fps = Math.round(r.fps);
     LIVE.speed = Math.round(r.speed * 10) / 10;
-    LIVE.cargo = Math.round(r.cargo);
-    LIVE.bank = Math.round(r.bank);
     LIVE.energy = Math.round(r.energy * 100);
-    LIVE.mineRate = Math.round(r.mineRate * 10) / 10;
     LIVE.pull = Math.round(r.pull * 100) / 100;
     LIVE.clearance = Math.round(r.clearance);
+    LIVE.timeScale = Math.round(r.timeScale * 100) / 100;
     LIVE.state = r.state;
     this.refreshResetButtons.forEach((refresh) => refresh());
   }
+
+  private scheduleRegen(): void {
+    if (this.regenTimer) clearTimeout(this.regenTimer);
+    this.regenTimer = setTimeout(() => {
+      this.regenTimer = null;
+      this.deps.field.regenerate();
+      this.deps.debugViz.refreshHitboxes();
+    }, 220);
+  }
+
+  private regenerate(): void {
+    this.deps.field.regenerate();
+    this.deps.debugViz.refreshHitboxes();
+    this.deps.onToast('asteroid field regenerated', 1500);
+  }
+
+  // --- Tunable control + always-visible reset ---------------------------------
 
   private addTunable(
     folder: GUI,
@@ -278,6 +330,8 @@ export class TuningPanel {
     step: number,
   ): Controller {
     const controller = folder.add(object, property, min, max, step);
+    const doc = PARAM_DOCS[property];
+    if (doc && controller.$name) controller.$name.title = doc;
     this.attachResetButton(controller, groupKey, object, property);
     return controller;
   }
@@ -292,12 +346,13 @@ export class TuningPanel {
     button.type = 'button';
     button.className = 'tuning-reset-value';
     button.textContent = '↺';
-    button.title = `Reset ${property} to default`;
+    button.title = `Reset ${property} to baseline`;
     button.setAttribute('aria-label', button.title);
 
+    const baselineValue = () => (this.baseline[groupKey] as TunableRecord)[property];
+
     const refresh = () => {
-      const defaultValue = (this.defaults[groupKey] as TunableRecord)[property];
-      const modified = object[property] !== defaultValue;
+      const modified = object[property] !== baselineValue();
       controller.domElement.classList.toggle('tuning-modified', modified);
       button.disabled = !modified;
     };
@@ -305,8 +360,7 @@ export class TuningPanel {
     button.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const defaultValue = (this.defaults[groupKey] as TunableRecord)[property];
-      controller.setValue(defaultValue);
+      controller.setValue(baselineValue());
       controller.updateDisplay();
       refresh();
     });
@@ -326,12 +380,10 @@ export class TuningPanel {
       .lil-gui .lil-controller.tuning-resettable .lil-widget {
         gap: var(--spacing);
       }
-
       .lil-gui .tuning-reset-value {
-        display: none;
-        width: var(--widget-height);
+        flex: 0 0 auto;
         height: var(--widget-height);
-        flex: 0 0 var(--widget-height);
+        width: var(--widget-height);
         border: 0;
         border-radius: var(--widget-border-radius);
         background: var(--widget-color);
@@ -339,67 +391,65 @@ export class TuningPanel {
         cursor: pointer;
         font-size: 13px;
         line-height: var(--widget-height);
+        padding: 0;
+        opacity: 0.25;
       }
-
-      .lil-gui .lil-controller.tuning-modified:hover .tuning-reset-value {
-        display: block;
-        opacity: 0.85;
+      .lil-gui .lil-controller.tuning-modified .tuning-reset-value {
+        opacity: 0.9;
+        background: var(--focus-color, var(--widget-color));
       }
-
-      .lil-gui .lil-controller.tuning-modified .tuning-reset-value:hover {
+      .lil-gui .tuning-reset-value:disabled {
+        cursor: default;
+      }
+      .lil-gui .tuning-reset-value:not(:disabled):hover {
         background: var(--hover-color);
         opacity: 1;
+      }
+      .lil-gui .lil-controller.tuning-modified .lil-name {
+        color: #ffd27f;
       }
     `;
     document.head.appendChild(style);
   }
 
-  private copyToClipboard(toast: (msg: string, dur: number) => void): void {
-    const dump = {
-      SHIP_TUNING, GRAVITY_TUNING, ECONOMY_TUNING, ENERGY_TUNING,
-      LIFECYCLE_TUNING, ASTEROID_TUNING, PICKUP_TUNING, BASE_TUNING, AUDIO_TUNING,
-      FEEDBACK_TUNING, WEAPON_TUNING, ENEMY_TUNING, ZONE_TUNING,
-    };
-    const text = JSON.stringify(dump, null, 2);
+  // --- Actions ----------------------------------------------------------------
+
+  private copyToClipboard(): void {
+    const text = JSON.stringify({
+      SHIP_TUNING, GRAVITY_TUNING, ENERGY_TUNING, LIFECYCLE_TUNING,
+      ASTEROID_TUNING, AUDIO_TUNING, FEEDBACK_TUNING,
+    }, null, 2);
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text)
-        .then(() => toast('tuning JSON copied to clipboard', 1500))
-        .catch(() => this.fallbackCopy(text, toast));
+        .then(() => this.deps.onToast('tuning JSON copied to clipboard', 1500))
+        .catch(() => this.fallbackCopy(text));
     } else {
-      this.fallbackCopy(text, toast);
+      this.fallbackCopy(text);
     }
   }
 
-  private fallbackCopy(text: string, toast: (msg: string, dur: number) => void): void {
-    // Some browsers gate clipboard.writeText behind secure context. Fallback
-    // dumps to console — easy to copy from devtools.
+  private fallbackCopy(text: string): void {
     console.log('[tuning]\n' + text);
-    toast('clipboard blocked — see console', 2000);
+    this.deps.onToast('clipboard blocked - see console', 2000);
   }
 
-  private resetToDefaults(toast: (msg: string, dur: number) => void): void {
-    Object.assign(SHIP_TUNING, this.defaults.SHIP_TUNING);
-    Object.assign(GRAVITY_TUNING, this.defaults.GRAVITY_TUNING);
-    Object.assign(ECONOMY_TUNING, this.defaults.ECONOMY_TUNING);
-    Object.assign(ENERGY_TUNING, this.defaults.ENERGY_TUNING);
-    Object.assign(LIFECYCLE_TUNING, this.defaults.LIFECYCLE_TUNING);
-    Object.assign(ASTEROID_TUNING, this.defaults.ASTEROID_TUNING);
-    Object.assign(PICKUP_TUNING, this.defaults.PICKUP_TUNING);
-    Object.assign(BASE_TUNING, this.defaults.BASE_TUNING);
-    Object.assign(AUDIO_TUNING, this.defaults.AUDIO_TUNING);
-    Object.assign(FEEDBACK_TUNING, this.defaults.FEEDBACK_TUNING);
-    Object.assign(WEAPON_TUNING, this.defaults.WEAPON_TUNING);
-    Object.assign(ENEMY_TUNING, this.defaults.ENEMY_TUNING);
-    Object.assign(ZONE_TUNING, this.defaults.ZONE_TUNING);
+  private saveAsDefaults(): void {
+    const ok = saveTuning();
+    this.deps.onToast(ok ? 'saved as launch defaults' : 'save failed - see console', 1600);
+  }
+
+  private clearSaved(): void {
+    clearSavedTuning();
+    this.deps.onToast('saved defaults cleared (baseline next launch)', 1800);
+  }
+
+  private resetToBaseline(): void {
+    applyTuning(this.baseline);
+    this.deps.audio.setMasterVolume(AUDIO_TUNING.MASTER_VOLUME);
     this.gui.controllersRecursive().forEach((c) => c.updateDisplay());
     this.refreshResetButtons.forEach((refresh) => refresh());
-    toast('tuning reset to defaults', 1400);
-  }
-
-  private regenerate(deps: TuningPanelDeps): void {
-    deps.ship.teleport({ x: deps.spawnPos.x, y: deps.spawnPos.y, z: deps.spawnPos.z });
-    deps.field.regenerate();
-    deps.pickups.regenerate();
-    deps.onToast('field + pickups regenerated', 1500);
+    this.deps.field.regenerate();
+    this.deps.debugViz.refreshHitboxes();
+    this.deps.onToast('tuning reset to baseline', 1400);
   }
 }

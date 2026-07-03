@@ -11,19 +11,26 @@ export interface ShipCommand {
   // Free-look orbit input for the camera. Rotates the chase-cam offset
   // around the ship; does NOT change ship orientation. [-1, 1].
   look: { yaw: number; pitch: number };
-  // Boost intensity [0, 1]. Multiplies forward thrust and energy drain.
-  // Gamepad can trigger this with B, or by pulling RT into its top range.
+  // Boost intensity [0, 1]. Multiplies thrust and energy drain.
   boost: number;
-  // Hold-fire weapon trigger.
-  fire: boolean;
   // Edge events (true on the frame they fire, then auto-clear).
   toggleCameraMode: boolean;
-  cycleShipVisual: boolean;
-  toggleHangar: boolean;
-  toggleLock: boolean;
+  restartRace: boolean;
+  startRace: boolean;
+  courseIndex: number | null;
+  courseDelta: number;
+  menuUp: boolean;
+  menuDown: boolean;
+  menuLeft: boolean;
+  menuRight: boolean;
+  menuConfirm: boolean;
+  menuBack: boolean;
+  menuPause: boolean;
 }
 
 const DEADZONE = 0.12;
+const MENU_REPEAT_INITIAL_MS = 260;
+const MENU_REPEAT_INTERVAL_MS = 82;
 
 function applyDeadzone(v: number): number {
   if (Math.abs(v) < DEADZONE) return 0;
@@ -44,23 +51,37 @@ export class Input {
 
   // Edge-triggered toggle requests, drained on each sample().
   private pendingCameraToggle = false;
-  private pendingShipCycle = false;
-  private pendingHangarToggle = false;
-  private pendingLockToggle = false;
+  private pendingRaceRestart = false;
+  private pendingRaceStart = false;
+  private pendingMenuUp = false;
+  private pendingMenuDown = false;
+  private pendingMenuLeft = false;
+  private pendingMenuRight = false;
+  private pendingMenuBack = false;
+  private pendingMenuPause = false;
+  private pendingCourseIndex: number | null = null;
 
   // Previous gamepad button states, for edge detection.
   private prevPadButtons: boolean[] = [];
-
+  private prevMenuDirX = 0;
+  private prevMenuDirY = 0;
+  private nextMenuRepeatX = 0;
+  private nextMenuRepeatY = 0;
   constructor(canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (e) => {
+      if (isTextInputTarget(e.target)) return;
       // KeyC toggles camera; consume on first press only (no repeat fire).
       if (e.code === 'KeyC' && !e.repeat) this.pendingCameraToggle = true;
-      if (e.code === 'KeyV' && !e.repeat) this.pendingShipCycle = true;
-      if ((e.code === 'Tab' || e.code === 'KeyT' || e.code === 'KeyY') && !e.repeat) {
-        this.pendingHangarToggle = true;
-        if (e.code === 'Tab') e.preventDefault();
-      }
-      if (e.code === 'KeyL' && !e.repeat) this.pendingLockToggle = true;
+      if (e.code === 'KeyR' && !e.repeat) this.pendingRaceRestart = true;
+      if (e.code === 'Enter' && !e.repeat) this.pendingRaceStart = true;
+      if (e.code === 'Escape' && !e.repeat) this.pendingMenuBack = true;
+      if (e.code === 'ArrowUp' && !e.repeat) this.pendingMenuUp = true;
+      if (e.code === 'ArrowDown' && !e.repeat) this.pendingMenuDown = true;
+      if (e.code === 'ArrowLeft' && !e.repeat) this.pendingMenuLeft = true;
+      if (e.code === 'ArrowRight' && !e.repeat) this.pendingMenuRight = true;
+      if (e.code === 'Digit1' && !e.repeat) this.pendingCourseIndex = 0;
+      if (e.code === 'Digit2' && !e.repeat) this.pendingCourseIndex = 1;
+      if (e.code === 'Digit3' && !e.repeat) this.pendingCourseIndex = 2;
       this.keys.add(e.code);
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
         e.preventDefault();
@@ -70,12 +91,23 @@ export class Input {
       this.keys.delete(e.code);
     });
     window.addEventListener('blur', () => this.keys.clear());
+    // Tab switches and OS overlays can swallow the matching keyup, leaving a key
+    // stuck "held" forever. Drop all held keys whenever we lose visibility.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.keys.clear();
+    });
 
     canvas.addEventListener('click', () => {
       if (!this.pointerLocked) canvas.requestPointerLock();
     });
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === canvas;
+      // Exiting lock (Esc, menu) also clears any in-flight mouse delta so a
+      // stale aim nudge doesn't apply on the next capture.
+      if (!this.pointerLocked) {
+        this.mouseDx = 0;
+        this.mouseDy = 0;
+      }
     });
     document.addEventListener('mousemove', (e) => {
       if (this.pointerLocked) {
@@ -119,16 +151,14 @@ export class Input {
   }
 
   // Build a ShipCommand for this tick.
-  // Xbox standard mapping:
+  // Gamepad mapping:
   //   L stick X (axis 0)         → roll
   //   L stick Y (axis 1)         → pitch (inverted: back = nose up)
-  //   R stick X (axis 2)         → camera yaw
-  //   R stick Y (axis 3)         → camera pitch
+  //   R stick X (axis 2)         → yaw / rudder
+  //   R stick Y (axis 3)         → vertical strafe
   //   LT (button 6, analog)      → reverse / brake
   //   RT (button 7, analog)      → forward thrust
-  //   LB (button 4)              → yaw right
-  //   RB (button 5)              → yaw left
-  //   B  (button 1)              → boost (drains energy faster, more thrust)
+  //   LB/RB (buttons 4/5)        → boost (drains energy faster, more thrust)
   //   Y  (button 3)              → toggle camera mode
   //   D-pad up (12)              → strafe up
   //   D-pad down (13)            → strafe down
@@ -140,11 +170,18 @@ export class Input {
       rotate: { pitch: 0, yaw: 0, roll: 0 },
       look: { yaw: 0, pitch: 0 },
       boost: 0,
-      fire: false,
       toggleCameraMode: false,
-      cycleShipVisual: false,
-      toggleHangar: false,
-      toggleLock: false,
+      restartRace: false,
+      startRace: false,
+      courseIndex: null,
+      courseDelta: 0,
+      menuUp: false,
+      menuDown: false,
+      menuLeft: false,
+      menuRight: false,
+      menuConfirm: false,
+      menuBack: false,
+      menuPause: false,
     };
 
     const pad = this.readGamepad();
@@ -153,12 +190,15 @@ export class Input {
       const ly = applyDeadzone(pad.axes[1] ?? 0);
       const rx = applyDeadzone(pad.axes[2] ?? 0);
       const ry = applyDeadzone(pad.axes[3] ?? 0);
+      const menuAxisX = Math.abs(lx) > 0.62 ? Math.sign(lx) : 0;
+      const menuAxisY = Math.abs(ly) > 0.62 ? Math.sign(ly) : 0;
 
-      // L stick: flight control. Right stick: camera look only.
+      // L stick: primary attitude. Right stick: rudder + lift trim for
+      // threading gates without taking pitch/roll off the left thumb.
       cmd.rotate.roll += lx;
       cmd.rotate.pitch += ly;
-      cmd.look.yaw += -rx;
-      cmd.look.pitch += -ry;
+      cmd.rotate.yaw += -rx;
+      cmd.thrust.y += -ry;
 
       // Triggers: forward (RT) / reverse (LT) thrust.
       const lt = pad.buttons[6]?.value ?? 0;
@@ -166,46 +206,79 @@ export class Input {
       cmd.thrust.z += -rt; // forward = -Z
       cmd.thrust.z += lt;  // reverse = +Z
 
-      // LB / RB: yaw rudder.
-      if (pad.buttons[4]?.pressed) cmd.rotate.yaw += 1;  // LB = yaw right
-      if (pad.buttons[5]?.pressed) cmd.rotate.yaw -= 1;  // RB = yaw left
-
       // D-pad: strafe (lateral + vertical thrust).
       if (pad.buttons[12]?.pressed) cmd.thrust.y += 1;  // up
       if (pad.buttons[13]?.pressed) cmd.thrust.y -= 1;  // down
       if (pad.buttons[14]?.pressed) cmd.thrust.x -= 1;  // left
       if (pad.buttons[15]?.pressed) cmd.thrust.x += 1;  // right
 
-      // Boost: B button only. (RT is forward thrust and never drains energy.)
+      // Boost: either bumper. (RT is forward thrust and never drains energy by itself.)
       cmd.boost = Math.max(
         cmd.boost,
-        pad.buttons[1]?.value ?? (pad.buttons[1]?.pressed ? 1 : 0),
+        pad.buttons[4]?.value ?? (pad.buttons[4]?.pressed ? 1 : 0),
+        pad.buttons[5]?.value ?? (pad.buttons[5]?.pressed ? 1 : 0),
       );
 
-      // Y button (b3): hangar open/close (edge-triggered). Inside the
-      // hangar this is read by HangarUI.pollGamepad and ignored here.
+      // Y button (b3): cockpit/chase camera toggle.
       const yPressed = pad.buttons[3]?.pressed ?? false;
-      if (yPressed && !this.prevPadButtons[3]) cmd.toggleHangar = true;
+      if (yPressed && !this.prevPadButtons[3]) cmd.toggleCameraMode = true;
 
-      // X button: cycle ship visual.
-      const xPressed = pad.buttons[2]?.pressed ?? false;
-      if (xPressed && !this.prevPadButtons[2]) cmd.cycleShipVisual = true;
+      // A button (b0): menu confirm on edge.
+      const aPressed = pad.buttons[0]?.pressed ?? false;
+      if (aPressed && !this.prevPadButtons[0]) cmd.startRace = true;
+      if (aPressed && !this.prevPadButtons[0]) cmd.menuConfirm = true;
 
-      // A button (b0): fire weapon (held).
-      if (pad.buttons[0]?.pressed) cmd.fire = true;
+      const bPressed = pad.buttons[1]?.pressed ?? false;
+      if (bPressed && !this.prevPadButtons[1]) cmd.menuBack = true;
 
-      // Back/Select (b8): camera toggle.
+      // Back/Select (b8): restart current run.
       const backPressed = pad.buttons[8]?.pressed ?? false;
-      if (backPressed && !this.prevPadButtons[8]) cmd.toggleCameraMode = true;
+      if (backPressed && !this.prevPadButtons[8]) cmd.restartRace = true;
 
-      // R3 click (b11 in standard mapping; some pads expose it as b10):
-      // toggle target lock-on.
-      const r3Pressed = (pad.buttons[11]?.pressed ?? false) || (pad.buttons[10]?.pressed ?? false);
-      const r3Prev = (this.prevPadButtons[11] ?? false) || (this.prevPadButtons[10] ?? false);
-      if (r3Pressed && !r3Prev) cmd.toggleLock = true;
+      const startPressed = pad.buttons[9]?.pressed ?? false;
+      if (startPressed && !this.prevPadButtons[9]) {
+        cmd.startRace = true;
+        cmd.menuConfirm = true;
+        cmd.menuPause = true;
+      }
+
+      const now = performance.now();
+      const dUpPressed = pad.buttons[12]?.pressed ?? false;
+      const dDownPressed = pad.buttons[13]?.pressed ?? false;
+      const dLeftPressed = pad.buttons[14]?.pressed ?? false;
+      const dRightPressed = pad.buttons[15]?.pressed ?? false;
+      const menuDirX = dLeftPressed ? -1 : dRightPressed ? 1 : menuAxisX;
+      const menuDirY = dUpPressed ? -1 : dDownPressed ? 1 : menuAxisY;
+      const repeatX = this.menuRepeat(menuDirX, this.prevMenuDirX, this.nextMenuRepeatX, now);
+      const repeatY = this.menuRepeat(menuDirY, this.prevMenuDirY, this.nextMenuRepeatY, now);
+      this.nextMenuRepeatX = repeatX.nextAt;
+      this.nextMenuRepeatY = repeatY.nextAt;
+      if (repeatX.fire && menuDirX < 0) {
+        cmd.menuLeft = true;
+        cmd.courseDelta -= 1;
+      }
+      if (repeatX.fire && menuDirX > 0) {
+        cmd.menuRight = true;
+        cmd.courseDelta += 1;
+      }
+      if (repeatY.fire && menuDirY < 0) {
+        cmd.menuUp = true;
+        cmd.courseDelta -= 1;
+      }
+      if (repeatY.fire && menuDirY > 0) {
+        cmd.menuDown = true;
+        cmd.courseDelta += 1;
+      }
 
       // Snapshot button states for next frame.
       this.prevPadButtons = pad.buttons.map((b) => b.pressed);
+      this.prevMenuDirX = menuDirX;
+      this.prevMenuDirY = menuDirY;
+    } else {
+      this.prevMenuDirX = 0;
+      this.prevMenuDirY = 0;
+      this.nextMenuRepeatX = 0;
+      this.nextMenuRepeatY = 0;
     }
 
     // Keyboard, jet-pilot mapping. No strafe — point and thrust.
@@ -234,9 +307,6 @@ export class Input {
     // Shift = boost (keyboard).
     if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) cmd.boost = 1;
 
-    // F = fire weapon (held).
-    if (this.keys.has('KeyF')) cmd.fire = true;
-
     // Mouse aim (pointer-locked) → ship rotation.
     if (this.pointerLocked) {
       cmd.rotate.yaw   += this.mouseDx * this.mouseSensitivity;
@@ -250,17 +320,42 @@ export class Input {
       cmd.toggleCameraMode = true;
       this.pendingCameraToggle = false;
     }
-    if (this.pendingShipCycle) {
-      cmd.cycleShipVisual = true;
-      this.pendingShipCycle = false;
+    if (this.pendingRaceRestart) {
+      cmd.restartRace = true;
+      this.pendingRaceRestart = false;
     }
-    if (this.pendingHangarToggle) {
-      cmd.toggleHangar = true;
-      this.pendingHangarToggle = false;
+    if (this.pendingRaceStart) {
+      cmd.startRace = true;
+      cmd.menuConfirm = true;
+      this.pendingRaceStart = false;
     }
-    if (this.pendingLockToggle) {
-      cmd.toggleLock = true;
-      this.pendingLockToggle = false;
+    if (this.pendingMenuUp) {
+      cmd.menuUp = true;
+      this.pendingMenuUp = false;
+    }
+    if (this.pendingMenuDown) {
+      cmd.menuDown = true;
+      this.pendingMenuDown = false;
+    }
+    if (this.pendingMenuLeft) {
+      cmd.menuLeft = true;
+      this.pendingMenuLeft = false;
+    }
+    if (this.pendingMenuRight) {
+      cmd.menuRight = true;
+      this.pendingMenuRight = false;
+    }
+    if (this.pendingMenuBack) {
+      cmd.menuBack = true;
+      this.pendingMenuBack = false;
+    }
+    if (this.pendingMenuPause) {
+      cmd.menuPause = true;
+      this.pendingMenuPause = false;
+    }
+    if (this.pendingCourseIndex !== null) {
+      cmd.courseIndex = this.pendingCourseIndex;
+      this.pendingCourseIndex = null;
     }
 
     cmd.thrust.x = clamp1(cmd.thrust.x);
@@ -278,4 +373,26 @@ export class Input {
   isPointerLocked(): boolean {
     return this.pointerLocked;
   }
+
+  /** Hand the cursor back so HTML menus are clickable when leaving the cockpit. */
+  releasePointerLock(): void {
+    if (document.pointerLockElement) document.exitPointerLock();
+  }
+
+  private menuRepeat(dir: number, prevDir: number, nextAt: number, now: number): { fire: boolean; nextAt: number } {
+    if (dir === 0) return { fire: false, nextAt: 0 };
+    if (dir !== prevDir) return { fire: true, nextAt: now + MENU_REPEAT_INITIAL_MS };
+    if (now >= nextAt) return { fire: true, nextAt: now + MENU_REPEAT_INTERVAL_MS };
+    return { fire: false, nextAt };
+  }
+}
+
+export function isTextInputTarget(target: EventTarget | null): boolean {
+  return isEditableElement(target) || isEditableElement(document.activeElement);
+}
+
+function isEditableElement(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
 }

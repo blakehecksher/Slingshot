@@ -1,14 +1,15 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { createEnvironmentMap } from './environment';
+import { buildBackdrop } from './backdrop';
+import { createPostFx, type PostFx } from './postfx';
 
 // Scene + renderer + lights + starfield + camera. No game state.
 
 export interface RenderRig {
   renderer: THREE.WebGLRenderer;
   composer: EffectComposer;
+  postfx: PostFx;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   // Background container (dome + stars). Each frame `skybox.position` should
@@ -28,6 +29,10 @@ export function createRenderRig(canvas: HTMLCanvasElement): RenderRig {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x03060d);
   scene.fog = new THREE.FogExp2(0x07111c, 0.000075);
+  // Image-based lighting: gives the PBR hull + rock materials something to
+  // reflect so metal reads as metal instead of flat shaded paint.
+  scene.environment = createEnvironmentMap(renderer);
+  scene.environmentIntensity = 0.6;
 
   const camera = new THREE.PerspectiveCamera(
     75,
@@ -38,6 +43,7 @@ export function createRenderRig(canvas: HTMLCanvasElement): RenderRig {
 
   const skybox = new THREE.Group();
   skybox.add(buildNebulaDome(9200));
+  buildBackdrop(skybox);
   scene.add(skybox);
 
   const key = new THREE.DirectionalLight(0xffb16a, 3.1);
@@ -56,27 +62,17 @@ export function createRenderRig(canvas: HTMLCanvasElement): RenderRig {
 
   skybox.add(buildStarfield(3400, 8800));
 
-  const composer = new EffectComposer(renderer);
-  composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  composer.setSize(window.innerWidth, window.innerHeight);
-  composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.55,
-    0.45,
-    0.78,
-  ));
-  composer.addPass(new OutputPass());
+  const postfx = createPostFx(renderer, scene, camera);
 
   window.addEventListener('resize', () => {
+    const ratio = Math.min(window.devicePixelRatio, 2);
     renderer.setSize(window.innerWidth, window.innerHeight, false);
-    composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    composer.setSize(window.innerWidth, window.innerHeight);
+    postfx.setSize(window.innerWidth, window.innerHeight, ratio);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
   });
 
-  return { renderer, composer, scene, camera, skybox };
+  return { renderer, composer: postfx.composer, postfx, scene, camera, skybox };
 }
 
 function buildNebulaDome(radius: number): THREE.Mesh {

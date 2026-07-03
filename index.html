@@ -54,43 +54,160 @@
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
       #pad-debug b { color: #eae0c8; }
+      /* ── Field Timing Rig (in-race HUD) ──────────────────────────
+         Salvaged instrument cluster: bolted iron side plates flanking
+         a raised amber chronometer. Worn metal, hard edges, scanlines,
+         teal/amber instrument glow, escalating gravity warning. */
       #status {
         position: fixed;
-        bottom: 12px;
+        bottom: 16px;
         left: 50%;
-        transform: translateX(-50%);
-        min-width: 380px;
-        font-size: 13px;
-        line-height: 1.55;
-        color: #eae0c8;
-        background: rgba(8, 10, 16, 0.62);
-        border: 1px solid rgba(208, 100, 36, 0.4);
-        padding: 8px 14px;
+        transform: translateX(-50%) scale(var(--hud-scale, 1));
+        transform-origin: bottom center;
+        display: grid;
+        grid-template-columns: minmax(158px, 206px) minmax(228px, 282px) minmax(158px, 206px);
+        align-items: end;
+        gap: 5px;
         pointer-events: none;
-        text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #ede3cc;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+        filter: drop-shadow(0 12px 30px rgba(0,0,0,0.6));
+        box-sizing: border-box;
       }
-      #status .line { white-space: nowrap; }
-      #status b {
-        color: #d06424;
-        letter-spacing: 0.06em;
-        display: inline-block;
-        min-width: 64px;
+      #status * { box-sizing: border-box; min-width: 0; }
+
+      /* side instrument plates -------------------------------------- */
+      #status .rig-side {
+        display: grid;
+        gap: 7px;
+        padding: 8px 11px 9px;
+        background:
+          radial-gradient(circle at 6px 6px, rgba(120,108,86,0.55) 0 1.4px, transparent 1.7px),
+          radial-gradient(circle at calc(100% - 6px) calc(100% - 6px), rgba(120,108,86,0.55) 0 1.4px, transparent 1.7px),
+          repeating-linear-gradient(0deg, rgba(212,146,31,0.022), rgba(212,146,31,0.022) 1px, transparent 1px, transparent 5px),
+          linear-gradient(180deg, rgba(28,21,16,0.93), rgba(10,8,6,0.95));
+        border: 1px solid #3e3428;
+        border-bottom-width: 2px;
+        box-shadow: inset 0 1px 0 rgba(237,227,204,0.05), inset 0 0 0 1px rgba(0,0,0,0.35);
+        clip-path: polygon(0 7px, 7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%);
       }
-      #status .bar {
-        display: inline-block;
-        color: rgba(208, 100, 36, 0.32);
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        margin: 0 6px;
+      #status .rig-side.right {
+        clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px));
       }
-      #status .bar-filled { color: #6dd6c8; }
-      #status .mining { color: #6dd6c8; margin-left: 8px; }
-      #status .reserve {
-        color: #ff5a4a;
-        font-weight: bold;
-        margin-left: 8px;
-        animation: blink 0.7s steps(2, start) infinite;
+
+      /* center chronometer — the timing board ----------------------- */
+      #status .rig-chrono {
+        position: relative;
+        display: grid;
+        justify-items: center;
+        align-content: center;
+        gap: 4px;
+        padding: 9px 16px 10px;
+        background:
+          repeating-linear-gradient(0deg, rgba(212,146,31,0.03), rgba(212,146,31,0.03) 1px, transparent 1px, transparent 5px),
+          linear-gradient(180deg, rgba(42,29,11,0.95), rgba(15,10,5,0.96));
+        border: 1px solid #9b6614;
+        border-top: 2px solid #d4921f;
+        box-shadow: inset 0 1px 0 rgba(240,179,61,0.20), 0 0 26px rgba(212,146,31,0.12);
       }
-      @keyframes blink { to { visibility: hidden; } }
+
+      /* gate progress pips */
+      #status .chrono-gates { display: flex; gap: 4px; align-items: center; height: 8px; }
+      #status .pip {
+        width: 7px; height: 7px;
+        background: rgba(110,98,80,0.26);
+        border: 1px solid rgba(110,98,80,0.5);
+      }
+      #status .pip.done { background: #2a8c80; border-color: #79e1d6; }
+      #status .pip.now {
+        background: #f0b33d; border-color: #f0b33d;
+        box-shadow: 0 0 7px rgba(240,179,61,0.85);
+      }
+
+      #status .chrono-time {
+        font-family: Orbitron, "Arial Black", system-ui, sans-serif;
+        font-weight: 900;
+        font-size: 31px;
+        line-height: 1;
+        letter-spacing: 0.02em;
+        color: #f0b33d;
+        text-shadow: 0 0 15px rgba(212,146,31,0.45), 0 2px 3px rgba(0,0,0,0.85);
+      }
+      #status.cockpit .chrono-time { text-shadow: 0 0 22px rgba(240,179,61,0.6), 0 2px 3px rgba(0,0,0,0.85); }
+      #status .chrono-foot {
+        display: flex; gap: 12px; align-items: baseline;
+        font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+      }
+      #status .chrono-foot .state { color: #c8c3b7; }
+      #status .chrono-foot .state.alert { color: #ff5a3c; }
+      #status .chrono-foot .state.go { color: #5dff9a; }
+      #status .chrono-foot .split { font-weight: 700; }
+      #status .chrono-foot .split.slow { color: #ff6a4a; }
+      #status .chrono-foot .split.fast { color: #5dff9a; }
+      #status .chrono-foot .split.none { color: #6e6250; font-weight: 400; }
+      #status .chrono-records {
+        font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+        color: #6e6250;
+      }
+      #status .chrono-records b { color: #c8c3b7; font-weight: 700; }
+
+      /* gauges (within side plates) --------------------------------- */
+      #status .gauge { display: grid; gap: 3px; }
+      #status .gauge-label {
+        font-size: 8.5px; letter-spacing: 0.16em; text-transform: uppercase;
+        color: #6e6250;
+      }
+      #status .gauge-row { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+      #status .gauge-val {
+        font-family: Orbitron, "Arial Black", system-ui, sans-serif;
+        font-weight: 800; font-size: 19px; line-height: 1;
+        color: #fff8e8; white-space: nowrap;
+      }
+      /* Orbitron has no tabular figures, so monospace digits manually:
+         each glyph gets a fixed-width box wide enough for the widest. */
+      #status .chrono-time .dg,
+      #status .gauge-val .dg { display: inline-block; width: 0.86em; text-align: center; }
+      #status .chrono-time .sep,
+      #status .gauge-val .sep { display: inline-block; width: 0.42em; text-align: center; }
+      #status .gauge-val i {
+        font-style: normal; font-size: 9px; color: #6e6250; margin-left: 3px;
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+      }
+      #status .gauge .sub {
+        font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+        color: #6e6250; white-space: nowrap;
+      }
+
+      /* meter bars */
+      #status .meter {
+        height: 6px;
+        background: rgba(0,0,0,0.55);
+        border: 1px solid rgba(0,0,0,0.6);
+        box-shadow: inset 0 0 0 1px rgba(110,98,80,0.16);
+        overflow: hidden;
+      }
+      #status .meter-fill { height: 100%; background: #2a8c80; }
+      #status .meter.amber .meter-fill { background: #d4921f; }
+      #status .gauge.low .meter-fill { background: #ff5a3c; }
+
+      /* gravity / well escalation */
+      #status .gauge.well .gauge-val { color: #79e1d6; }
+      #status .gauge.well.lvl1 .gauge-val { color: #f0b33d; }
+      #status .gauge.well.lvl2 .gauge-val { color: #f28f45; }
+      #status .gauge.well.lvl3 .gauge-val,
+      #status .gauge.well.lvl3 .gauge-label {
+        color: #ff5a3c; text-shadow: 0 0 12px rgba(255,90,60,0.7);
+      }
+
+      @media (max-width: 860px) {
+        #status { gap: 3px; grid-template-columns: minmax(128px,1fr) minmax(180px,1.4fr) minmax(128px,1fr); }
+        #status .chrono-time { font-size: 25px; }
+        #status .gauge-val { font-size: 16px; }
+      }
+      @media (max-width: 560px) {
+        #status { left: 8px; right: 8px; transform: scale(var(--hud-scale, 1)); transform-origin: bottom center; width: auto; }
+      }
       #toast {
         position: fixed;
         top: 38%;

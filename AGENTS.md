@@ -1,164 +1,175 @@
 # AGENTS.md
 
-Read this file first, every session. It tells you how to orient, how to maintain project state, and how to close out.
+Use this file to orient to the project. Prefer direct task execution over documentation maintenance unless the user starts or ends a formal session.
 
-\---
+---
+
+## Core principle
+
+Use the project memory system when it helps the task.
+
+Do not treat every request as a full work session. For small, local tasks, inspect the relevant files directly and make the change.
+
+---
+
+## Context files
+
+* `docs/state.md` — Current project status. Read when the task depends on current project state.
+* `docs/decisions.md` — Durable project decisions. Read before changing architecture, data model, major UX, dependencies, or settled behavior.
+* `docs/plans/` — Active or past plans. Read only when continuing a plan, following an active plan linked from `state.md`, or when the user asks for planned work.
+* `docs/spec/` — Versioned specs. Read when implementing or revising project intent.
+* `docs/log/` — Session history. Read only for recovery, handoff, or when asked to reconstruct prior work.
+
+---
+
+## Default behavior
+
+For small or focused tasks:
+
+1. Inspect the relevant files.
+2. Make the smallest useful change.
+3. Do not update project docs unless the change affects current state, decisions, plans, or known issues.
+4. Do not create a session log unless the user asks for a formal session closeout.
+5. Report what changed and what was verified.
+
+---
+
+## When to read project docs
+
+Read `docs/state.md` before broad, state-dependent, or multi-step work.
+
+Read `docs/decisions.md` before:
+
+* adding or changing dependencies;
+* changing architecture;
+* changing data models;
+* changing major UX patterns;
+* reversing or questioning an existing project direction.
+
+Read `docs/plans/` only when:
+
+* the user asks to continue a plan;
+* `state.md` links to an active plan relevant to the task;
+* the task is explicitly planning-oriented.
+
+Read `docs/log/` only when:
+
+* recovering lost context;
+* reconstructing prior work;
+* checking what happened in a previous session;
+* resolving a mismatch between files and `state.md`.
+
+---
 
 ## Timestamps
 
-All filenames and timestamps use `YYYY-MM-DD HHMM` (24-hour, no colon).
+All filenames and timestamps use:
 
-Get the current timestamp by running:
+```text
+YYYY-MM-DD HHMM
+```
+
+Use 24-hour time and no colon.
+
+When creating or updating timestamped docs, get the current timestamp with:
 
 ```bash
 date '+%Y-%m-%d %H%M'
 ```
 
-Always run this command. Never guess or approximate a timestamp.
+Do not guess timestamps for new logs, plans, decisions, or state updates.
 
-\---
+---
 
-## Starting a session
+## Format templates
 
-### Fresh project
+Formats for `state.md`, `decisions.md`, log files, and plan files are in `docs/templates/`.
 
-1. Check `docs/spec/` for the most recent spec file. That's current intent.
-2. Create `docs/state.md` using the format below.
-3. Create an initial log: `docs/log/YYYY-MM-DD HHMM Kickoff.md`
+Read the relevant template only when creating or updating one of those files.
+
+---
+
+## Formal session mode
+
+Use formal session mode when the user says `/session`, asks for a closeout, asks to continue a prior session, or when completing a substantial multi-step work session.
+
+In formal session mode:
+
+1. Read `docs/state.md`.
+2. Read `docs/decisions.md` if the work may touch durable decisions.
+3. Check `docs/plans/` if `state.md` links an active plan.
+4. Do the work.
+5. Update `docs/state.md` if the project state changed.
+6. Create a log in `docs/log/`.
+7. Report what changed, what was verified, and what remains unfinished.
+
+---
+
+## Fresh project setup
+
+For a fresh project:
+
+1. Check `docs/spec/` for the most recent spec file. The most recent spec is current intent.
+2. Create `docs/state.md` using `docs/templates/state.md`.
+3. Create an initial log using `docs/templates/log.md`:
+
+   ```text
+   docs/log/YYYY-MM-DD HHMM Kickoff.md
+   ```
 4. Begin work.
 
-### Existing project
-
-1. Read `docs/state.md` — current focus, what's working, what's next.
-2. Read `docs/decisions.md` — don't re-litigate settled decisions.
-3. Check `docs/plans/` for the active plan linked in state.md. Follow it unless you have a specific reason not to. If you diverge, log why.
-4. Begin work.
-
-\---
-
-## During a session
-
-Update `docs/state.md` whenever the project state changes meaningfully — don't wait until the end. If something breaks, gets resolved, or changes direction, reflect that immediately. State.md should describe where the project *is*, not where it was at session start.
-
-Use `/session` when the user signals a stopping point, or when work on a discrete chunk is complete.
-
-\---
+---
 
 ## Docs structure
 
-```
+```text
 docs/
-├── spec/          Versioned specs. Most recent file is current truth.
-├── state.md       Single file. Rewritten to reflect current reality, not appended.
-├── decisions.md   Append-only. One entry per decision. Cross-check before adding.
-├── log/           Append-only. One file per session.
-└── plans/         One file per plan. Each has a status line at the top.
+├── spec/          Versioned specs. Most recent file is current intent.
+├── state.md       Current project state. Rewritten in place.
+├── decisions.md   Durable decisions. Append-only.
+├── log/           Session logs. Append-only.
+├── plans/         Plans. One file per plan.
+└── templates/     Format references. Read only when creating/updating docs.
 ```
 
-\---
-
-## state.md format
-
-Keep state.md current. Update any section that's changed. Remove anything that's no longer true. Don't append — edit in place.
-
-```
-# State
-\\\_Last updated: YYYY-MM-DD HHMM\\\_
-
-## Current focus
-
-## What's working
-
-## In progress
-
-## Known issues
-
-## Next actions
-1.
-2.
-3.
-
-## Active plan
-docs/plans/YYYY-MM-DD HHMM Plan - Subject.md
-
-## Recent logs
-- docs/log/YYYY-MM-DD HHMM Subject.md — one line summary
-```
-
-\---
-
-## decisions.md format
-
-Append only. Before adding a new entry, scan existing entries and flag any conflicts.
-
-```
-## YYYY-MM-DD HHMM — Short title
-
-Decision: What was decided.
-Reason: Why.
-Supersedes: \\\[link to prior decision if applicable]
-```
-
-\---
-
-## Plan file format
-
-Each plan file starts with a status line. Keep it current.
-
-```
-status: active | complete | abandoned
-
-# Plan — Subject
-\\\_Created: YYYY-MM-DD HHMM\\\_
-
-## Goal
-
-## Steps
-1.
-2.
-3.
-
-## Notes
-```
-
-\---
-
-## Log file format
-
-One file per session. Filename: `YYYY-MM-DD HHMM Subject.md`
-
-```
-# YYYY-MM-DD HHMM — Subject
-
-## What was done
-
-## What worked
-
-## What didn't and why
-
-## Decisions made
-(or "none")
-
-## Left unfinished
-
-## state.md updated: yes / no
-```
-
-\---
+---
 
 ## Non-negotiable rules
 
-* Read state.md before writing any code.
-* Cross-check decisions.md before appending to it.
-* Use `/session` to close out properly — don't skip it.
-* If you find something broken that you weren't asked to fix, log it under Known Issues. Don't silently fix unrelated things.
-* If you're about to do something destructive or irreversible, say so before doing it.
+* Prefer small, targeted changes over broad rewrites.
+* Do not silently fix unrelated issues. If you find unrelated problems, note them under Known Issues only when project docs are being updated.
+* Do not add dependencies without a specific reason.
+* Do not edit generated files unless explicitly asked.
+* Do not perform destructive or irreversible actions without saying so first.
+* Cross-check `decisions.md` before adding or reversing durable decisions.
+* Use `/session` procedures only for formal session closeout or substantial multi-step work.
 
-\---
+---
 
 ## Recovery
 
-If `state.md` seems wrong or out of date: read the most recent log file to reconstruct context, rewrite state.md from that, and note the correction in a new log entry.
+If `state.md` seems wrong or out of date:
 
-If a plan link in state.md is broken or the plan file is missing: note it in Known Issues, find the most recent plan file in `docs/plans/`, and relink.
+1. Read the most recent relevant log file.
+2. Check the current files directly.
+3. Rewrite `state.md` to reflect current reality.
+4. Note the correction in a new log only if this is a formal session.
 
+If a plan link in `state.md` is broken or the plan file is missing:
+
+1. Note the issue if project docs are being updated.
+2. Look for the most recent relevant plan in `docs/plans/`.
+3. Relink only if the plan is clearly still active.
+4. Otherwise remove the broken active-plan reference from `state.md`.
+
+---
+
+## Closeout
+
+For ordinary tasks, close with:
+
+* what changed;
+* what was checked;
+* anything still unresolved.
+
+For formal session mode, also update `state.md` and create a log.

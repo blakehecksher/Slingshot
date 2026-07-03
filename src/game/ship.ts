@@ -5,7 +5,6 @@ import {
   ATTACHMENT_NAMES,
   buildShipVariant,
   SHIP_VARIANTS,
-  SHIP_VISUALS,
   type AttachmentName,
   type BuiltShip,
   type ShipVariantId,
@@ -13,10 +12,7 @@ import {
 } from '../render/shipVisual';
 import {
   COL_ASTEROID,
-  COL_BASE,
-  COL_ENEMY,
-  COL_PICKUP,
-  COL_PROJECTILE,
+  COL_CHECKPOINT,
   COL_SHIP,
   interactionGroups,
 } from './collision';
@@ -28,22 +24,16 @@ import type { ShipCommand } from './input';
 // upgrades, weapons, and VFX can mount without knowing the visual origin.
 
 // Re-exports kept for back-compat with callers that expected these names from ship.ts.
-export { SHIP_VARIANTS, SHIP_VISUALS, type ShipVariantId, type AttachmentName };
+export { SHIP_VARIANTS, type ShipVariantId, type AttachmentName };
 
 export interface ShipMods {
   // Multipliers and additions layered onto SHIP_TUNING by upgrades / parts.
   thrustMult: number;
   reverseMult: number;
   agilityMult: number;
-  cargoCapAdd: number;
   energyMaxAdd: number;
   hullHpMax: number;
-  miningCoefAdd: number;
   brakeMult: number;
-  weaponDamage: number;
-  weaponRof: number;
-  weaponMuzzle: number;
-  partMass: number;
 }
 
 export function defaultShipMods(): ShipMods {
@@ -51,28 +41,22 @@ export function defaultShipMods(): ShipMods {
     thrustMult: 1,
     reverseMult: 1,
     agilityMult: 1,
-    cargoCapAdd: 0,
     energyMaxAdd: 0,
     hullHpMax: 100,
-    miningCoefAdd: 0,
     brakeMult: 1,
-    weaponDamage: 0,
-    weaponRof: 0,
-    weaponMuzzle: 0,
-    partMass: 0,
   };
 }
 
 export const SHIP_TUNING = {
   MASS: 1.0,
-  // Rear thrusters do most of the work. Reverse thrusters are small RCS jets,
-  // ~30% of main thrust. Brake is a velocity damper, not a counter-thrust.
+  // Racing baseline: RT and LT are symmetric full thrust; strafe axes are
+  // three-quarters of main thrust for correction without replacing line choice.
   FORWARD_THRUST: 200,
-  REVERSE_THRUST: 65,
-  STRAFE_THRUST: 30,
+  REVERSE_THRUST: 200,
+  STRAFE_THRUST: 150,
   FORWARD_THRUST_BIAS: 1.0,
 
-  MAX_PITCH_RATE: 1.1,
+  MAX_PITCH_RATE: 1.5,
   MAX_YAW_RATE: 1.5,
   MAX_ROLL_RATE: 1.5,
 
@@ -86,15 +70,12 @@ export const SHIP_TUNING = {
   SPEED_ASSIST_PULL_SUPPRESS_LO: 1.0,
   SPEED_ASSIST_PULL_SUPPRESS_HI: 8.0,
 
-  // Boost only multiplies forward thrust (see applyCommand: only inside
-  // fwdThrust path, never inside revThrust).
+  // Boost multiplies every thrust axis while held.
   BOOST_THRUST_MULT: 2.4,
   BOOST_ENERGY_MULT: 4.0,
 
   // Cargo-fraction sluggishness. 0 = no effect; higher = full-cargo ship feels
   // heavier. Story §6.2: cargo coupling.
-  CARGO_THRUST_PENALTY: 0.4,
-  CARGO_AGILITY_PENALTY: 0.25,
 };
 
 const HULL_HX = 0.75;
@@ -104,6 +85,8 @@ const HULL_VOLUME = (HULL_HX * 2) * (HULL_HY * 2) * (HULL_HZ * 2);
 
 const LINEAR_DAMPING  = 0.0;
 const ANGULAR_DAMPING = 0.0;
+const SHIP_ACTIVE_FILTER = COL_ASTEROID | COL_CHECKPOINT;
+const SHIP_INVULN_FILTER = COL_CHECKPOINT;
 
 export class Ship {
   readonly body: RAPIER.RigidBody;
@@ -126,30 +109,38 @@ export class Ship {
     strafeRight: 0,
     strafeUp: 0,
     strafeDown: 0,
+    pitchUp: 0,
+    pitchDown: 0,
+    yawLeft: 0,
+    yawRight: 0,
+    rollLeft: 0,
+    rollRight: 0,
   };
   private _variant: ShipVariantId;
   private _frozen = false;
   private _thrustEnabled = true;
   private _thrustScale = 1;
   private _ambientPull = 0;
-  private _cargoFraction = 0;
   private _hp = 100;
 
   constructor(physics: PhysicsWorld, scene: THREE.Scene) {
     this._physics = physics;
     this._scene = scene;
-    this._variant = SHIP_VISUALS.variant;
+    this._variant = 'scrapper';
     const desc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(0, 0, 0)
       .setLinearDamping(LINEAR_DAMPING)
-      .setAngularDamping(ANGULAR_DAMPING);
+      .setAngularDamping(ANGULAR_DAMPING)
+      // Continuous collision detection: at slingshot speeds the hull can travel
+      // many metres per step and tunnel clean through an asteroid otherwise.
+      .setCcdEnabled(true);
     this.body = physics.world.createRigidBody(desc);
 
     const density = SHIP_TUNING.MASS / HULL_VOLUME;
     const colliderDesc = RAPIER.ColliderDesc
       .cuboid(HULL_HX, HULL_HY, HULL_HZ)
       .setDensity(density)
-      .setCollisionGroups(interactionGroups(COL_SHIP, COL_ASTEROID | COL_PICKUP | COL_BASE | COL_PROJECTILE | COL_ENEMY))
+      .setCollisionGroups(interactionGroups(COL_SHIP, SHIP_ACTIVE_FILTER))
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
       .setFriction(0.1)
       .setRestitution(0.05);
@@ -169,17 +160,14 @@ export class Ship {
     const r = this.body.rotation();
     this._quat.set(r.x, r.y, r.z, r.w);
 
-    const cargoPenalty = 1 / (1 + this._cargoFraction * SHIP_TUNING.CARGO_THRUST_PENALTY);
-    const cargoAgility = 1 / (1 + this._cargoFraction * SHIP_TUNING.CARGO_AGILITY_PENALTY);
-
     if (this._thrustEnabled) {
       const mass = SHIP_TUNING.MASS;
       const boost = Math.max(0, Math.min(1, cmd.boost ?? 0));
       const boostMult = 1 + boost * (SHIP_TUNING.BOOST_THRUST_MULT - 1);
-      const fwdThrust = SHIP_TUNING.FORWARD_THRUST * SHIP_TUNING.FORWARD_THRUST_BIAS * mass * boostMult * this.mods.thrustMult * cargoPenalty;
-      const revThrust = SHIP_TUNING.REVERSE_THRUST * mass * this.mods.reverseMult * cargoPenalty;
+      const fwdThrust = SHIP_TUNING.FORWARD_THRUST * SHIP_TUNING.FORWARD_THRUST_BIAS * mass * boostMult * this.mods.thrustMult;
+      const revThrust = SHIP_TUNING.REVERSE_THRUST * mass * boostMult * this.mods.reverseMult;
       const forwardScale = cmd.thrust.z < 0 ? fwdThrust : revThrust;
-      const strafe = SHIP_TUNING.STRAFE_THRUST * mass * this.mods.thrustMult * cargoPenalty;
+      const strafe = SHIP_TUNING.STRAFE_THRUST * mass * boostMult * this.mods.thrustMult;
       this._force.set(
         cmd.thrust.x * strafe,
         cmd.thrust.y * strafe,
@@ -200,7 +188,7 @@ export class Ship {
       this.clearThrustVisuals();
     }
 
-    const ag = this.mods.agilityMult * cargoAgility;
+    const ag = this.mods.agilityMult;
     this._localAxis.set(
       cmd.rotate.pitch * SHIP_TUNING.MAX_PITCH_RATE * ag,
       cmd.rotate.yaw * SHIP_TUNING.MAX_YAW_RATE * ag,
@@ -223,23 +211,9 @@ export class Ship {
     this.attachments = built.attachments;
     this._thrusters = built.thrusters;
     this._scene.remove(oldMesh);
+    disposeObject(oldMesh);
     this._scene.add(this.mesh);
     this.syncMeshFromBody();
-  }
-
-  setVariant(variant: ShipVariantId): void {
-    if (variant === this._variant) return;
-    this._variant = variant;
-    SHIP_VISUALS.variant = variant;
-    this.setVisual(buildShipVariant(variant));
-  }
-
-  cycleVariant(direction = 1): ShipVariantId {
-    const ids = Object.keys(SHIP_VARIANTS) as ShipVariantId[];
-    const i = ids.indexOf(this._variant);
-    const next = ids[(i + direction + ids.length) % ids.length];
-    this.setVariant(next);
-    return next;
   }
 
   setMods(mods: ShipMods): void {
@@ -263,12 +237,6 @@ export class Ship {
   get hpFraction(): number { return this.mods.hullHpMax > 0 ? this._hp / this.mods.hullHpMax : 0; }
 
   /** Cargo fraction of cap [0..1]. Drives sluggishness + audio cargo hum. */
-  setCargoFraction(f: number): void {
-    this._cargoFraction = Math.max(0, Math.min(1, f));
-  }
-
-  get cargoFraction(): number { return this._cargoFraction; }
-
   /** Iterate over Object3D attachment points by canonical name. Useful for
    *  upgrade-mount loops without naming each slot. */
   forEachAttachment(fn: (name: AttachmentName, node: THREE.Object3D) => void): void {
@@ -294,6 +262,12 @@ export class Ship {
     this.setThrusterVisual('strafeRight', Math.max(0, -cmd.thrust.x), 0.4, 0.7);
     this.setThrusterVisual('strafeUp', Math.max(0, -cmd.thrust.y), 0.36, 0.62);
     this.setThrusterVisual('strafeDown', Math.max(0, cmd.thrust.y), 0.36, 0.62);
+    this.setThrusterVisual('pitchUp', Math.max(0, cmd.rotate.pitch), 0.3, 0.5);
+    this.setThrusterVisual('pitchDown', Math.max(0, -cmd.rotate.pitch), 0.3, 0.5);
+    this.setThrusterVisual('yawLeft', Math.max(0, -cmd.rotate.yaw), 0.3, 0.5);
+    this.setThrusterVisual('yawRight', Math.max(0, cmd.rotate.yaw), 0.3, 0.5);
+    this.setThrusterVisual('rollLeft', Math.max(0, -cmd.rotate.roll), 0.28, 0.46);
+    this.setThrusterVisual('rollRight', Math.max(0, cmd.rotate.roll), 0.28, 0.46);
   }
 
   private clearThrustVisuals(): void {
@@ -303,6 +277,12 @@ export class Ship {
     this.setThrusterVisual('strafeRight', 0, 0.4, 0.7);
     this.setThrusterVisual('strafeUp', 0, 0.36, 0.62);
     this.setThrusterVisual('strafeDown', 0, 0.36, 0.62);
+    this.setThrusterVisual('pitchUp', 0, 0.3, 0.5);
+    this.setThrusterVisual('pitchDown', 0, 0.3, 0.5);
+    this.setThrusterVisual('yawLeft', 0, 0.3, 0.5);
+    this.setThrusterVisual('yawRight', 0, 0.3, 0.5);
+    this.setThrusterVisual('rollLeft', 0, 0.28, 0.46);
+    this.setThrusterVisual('rollRight', 0, 0.28, 0.46);
   }
 
   private setThrusterVisual(key: keyof ThrusterSet, amount: number, baseWidth: number, baseLength: number): void {
@@ -396,9 +376,9 @@ export class Ship {
     const collider = this._physics.world.getCollider(this.colliderHandle);
     if (!collider) return;
     if (invuln) {
-      collider.setCollisionGroups(interactionGroups(COL_SHIP, COL_PICKUP | COL_BASE));
+      collider.setCollisionGroups(interactionGroups(COL_SHIP, SHIP_INVULN_FILTER));
     } else {
-      collider.setCollisionGroups(interactionGroups(COL_SHIP, COL_ASTEROID | COL_PICKUP | COL_BASE | COL_PROJECTILE | COL_ENEMY));
+      collider.setCollisionGroups(interactionGroups(COL_SHIP, SHIP_ACTIVE_FILTER));
     }
   }
 
@@ -414,4 +394,16 @@ export class Ship {
     const v = this.body.linvel();
     return Math.hypot(v.x, v.y, v.z);
   }
+}
+
+/** Free GPU geometry + materials of a discarded mesh tree. Each ship build mints
+ *  fresh geometries and ~9 materials, so swapping visuals leaks without this. */
+function disposeObject(root: THREE.Object3D): void {
+  root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    mesh.geometry?.dispose?.();
+    const mat = mesh.material;
+    if (Array.isArray(mat)) mat.forEach((m) => m?.dispose?.());
+    else mat?.dispose?.();
+  });
 }

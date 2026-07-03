@@ -1,10 +1,12 @@
 import * as THREE from 'three';
-import type { Asteroid } from './asteroids';
+import type { Asteroid, AsteroidGravityClass } from './asteroids';
 
 export interface GravitySample {
   readonly acceleration: THREE.Vector3;
   readonly closestClearance: number;
   readonly strongestPull: number;
+  readonly strongestClass: AsteroidGravityClass | null;
+  readonly strongestClearance: number;
 }
 
 export const GRAVITY_TUNING = {
@@ -12,6 +14,8 @@ export const GRAVITY_TUNING = {
   SOFTENING_FACTOR: 0.35,
   MIN_SOFTENING: 12,
   DANGER_RANGE: 220,
+  MAX_PASSIVE_EFFECT_DISTANCE: 5200,
+  LARGE_BODY_EFFECT_RADIUS_MULT: 24,
   // Dead Iron core ramp. When surface clearance drops below
   // radius * CORE_BOOST_RANGE_FRAC, the well ramps quadratically up to
   // (1 + CORE_BOOST_PEAK)x at the surface. Story §4: concentrated cores hit
@@ -26,16 +30,26 @@ export function sampleGravityAt(position: THREE.Vector3, asteroids: readonly Ast
   const acceleration = new THREE.Vector3();
   let closestClearance = Number.POSITIVE_INFINITY;
   let strongestPull = 0;
+  let strongestClass: AsteroidGravityClass | null = null;
+  let strongestClearance = Number.POSITIVE_INFINITY;
 
   for (const asteroid of asteroids) {
     _delta.subVectors(asteroid.position, position);
     const distanceSq = Math.max(_delta.lengthSq(), 0.0001);
+    const maxEffectDistance = Math.max(
+      GRAVITY_TUNING.MAX_PASSIVE_EFFECT_DISTANCE,
+      asteroid.radius * GRAVITY_TUNING.LARGE_BODY_EFFECT_RADIUS_MULT,
+    );
+    if (distanceSq > maxEffectDistance * maxEffectDistance) continue;
+
     const distance = Math.sqrt(distanceSq);
+    const clearance = distance - asteroid.radius;
+    closestClearance = Math.min(closestClearance, clearance);
+    if (asteroid.mass <= 0) continue;
     const softening = Math.max(GRAVITY_TUNING.MIN_SOFTENING, asteroid.radius * GRAVITY_TUNING.SOFTENING_FACTOR);
     const softenedSq = distanceSq + softening * softening;
     let pull = (GRAVITY_TUNING.G * asteroid.mass) / softenedSq;
 
-    const clearance = distance - asteroid.radius;
     const coreRange = asteroid.radius * GRAVITY_TUNING.CORE_BOOST_RANGE_FRAC;
     if (coreRange > 0 && clearance < coreRange) {
       const t = Math.max(0, 1 - clearance / coreRange);
@@ -43,11 +57,14 @@ export function sampleGravityAt(position: THREE.Vector3, asteroids: readonly Ast
     }
 
     acceleration.addScaledVector(_delta, pull / distance);
-    strongestPull = Math.max(strongestPull, pull);
-    closestClearance = Math.min(closestClearance, clearance);
+    if (pull > strongestPull) {
+      strongestPull = pull;
+      strongestClass = asteroid.gravityClass;
+      strongestClearance = clearance;
+    }
   }
 
-  return { acceleration, closestClearance, strongestPull };
+  return { acceleration, closestClearance, strongestPull, strongestClass, strongestClearance };
 }
 
 export function dangerForClearance(clearance: number): number {

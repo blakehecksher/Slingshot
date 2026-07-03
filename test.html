@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Slingshot — Flight Test Lab</title>
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+      body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #d8d2c2; }
+      #app { width: 100vw; height: 100vh; display: block; }
+      #hud {
+        position: fixed; top: 8px; left: 8px;
+        font-size: 12px; line-height: 1.4;
+        color: #d8d2c2; opacity: 0.85;
+        pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        white-space: pre;
+      }
+      #lab-banner {
+        position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
+        font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+        color: #f0b33d; opacity: 0.8; pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+      }
+      #toast {
+        position: fixed; top: 38%; left: 50%; transform: translateX(-50%);
+        font-size: 18px; letter-spacing: 0.08em; color: #eae0c8;
+        background: rgba(8, 10, 16, 0.72);
+        border: 1px solid rgba(208, 100, 36, 0.55);
+        padding: 10px 22px; pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        opacity: 0; transition: opacity 0.18s ease-out;
+      }
+      #fade-overlay {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: #000; opacity: 0; pointer-events: none;
+      }
+      /* ── Field Timing Rig (shared with the main game HUD) ── */
+      #status {
+        position: fixed; bottom: 16px; left: 50%;
+        transform: translateX(-50%) scale(var(--hud-scale, 1));
+        transform-origin: bottom center;
+        display: grid;
+        grid-template-columns: minmax(158px, 206px) minmax(228px, 282px) minmax(158px, 206px);
+        align-items: end; gap: 5px; pointer-events: none;
+        font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #ede3cc; text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+        filter: drop-shadow(0 12px 30px rgba(0,0,0,0.6)); box-sizing: border-box;
+      }
+      #status * { box-sizing: border-box; min-width: 0; }
+      #status .rig-side {
+        display: grid; gap: 7px; padding: 8px 11px 9px;
+        background:
+          radial-gradient(circle at 6px 6px, rgba(120,108,86,0.55) 0 1.4px, transparent 1.7px),
+          radial-gradient(circle at calc(100% - 6px) calc(100% - 6px), rgba(120,108,86,0.55) 0 1.4px, transparent 1.7px),
+          repeating-linear-gradient(0deg, rgba(212,146,31,0.022), rgba(212,146,31,0.022) 1px, transparent 1px, transparent 5px),
+          linear-gradient(180deg, rgba(28,21,16,0.93), rgba(10,8,6,0.95));
+        border: 1px solid #3e3428; border-bottom-width: 2px;
+        box-shadow: inset 0 1px 0 rgba(237,227,204,0.05), inset 0 0 0 1px rgba(0,0,0,0.35);
+        clip-path: polygon(0 7px, 7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%);
+      }
+      #status .rig-side.right {
+        clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px));
+      }
+      #status .rig-chrono {
+        position: relative; display: grid; justify-items: center; align-content: center;
+        gap: 4px; padding: 9px 16px 10px;
+        background:
+          repeating-linear-gradient(0deg, rgba(212,146,31,0.03), rgba(212,146,31,0.03) 1px, transparent 1px, transparent 5px),
+          linear-gradient(180deg, rgba(42,29,11,0.95), rgba(15,10,5,0.96));
+        border: 1px solid #9b6614; border-top: 2px solid #d4921f;
+        box-shadow: inset 0 1px 0 rgba(240,179,61,0.20), 0 0 26px rgba(212,146,31,0.12);
+      }
+      #status .chrono-time {
+        font-family: Orbitron, "Arial Black", system-ui, sans-serif; font-weight: 900;
+        font-size: 31px; line-height: 1; letter-spacing: 0.02em; color: #f0b33d;
+        text-shadow: 0 0 15px rgba(212,146,31,0.45), 0 2px 3px rgba(0,0,0,0.85);
+      }
+      #status .chrono-foot {
+        display: flex; gap: 12px; align-items: baseline;
+        font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+      }
+      #status .chrono-foot .state { color: #5dff9a; }
+      #status .chrono-records { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #6e6250; }
+      #status .chrono-records b { color: #c8c3b7; font-weight: 700; }
+      #status .gauge { display: grid; gap: 3px; }
+      #status .gauge-label { font-size: 8.5px; letter-spacing: 0.16em; text-transform: uppercase; color: #6e6250; }
+      #status .gauge-row { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+      #status .gauge-val {
+        font-family: Orbitron, "Arial Black", system-ui, sans-serif; font-weight: 800;
+        font-size: 19px; line-height: 1; color: #fff8e8; white-space: nowrap;
+      }
+      #status .gauge-val i { font-style: normal; font-size: 9px; color: #6e6250; margin-left: 3px; font-family: "IBM Plex Mono", ui-monospace, monospace; }
+      #status .gauge .sub { font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: #6e6250; white-space: nowrap; }
+      #status .meter { height: 6px; background: rgba(0,0,0,0.55); border: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 0 0 1px rgba(110,98,80,0.16); overflow: hidden; }
+      #status .meter-fill { height: 100%; background: #2a8c80; }
+      #status .meter.amber .meter-fill { background: #d4921f; }
+      #status .gauge.low .meter-fill { background: #ff5a3c; }
+      #status .gauge.well .gauge-val { color: #79e1d6; }
+      #status .gauge.well.lvl1 .gauge-val { color: #f0b33d; }
+      #status .gauge.well.lvl2 .gauge-val { color: #f28f45; }
+      #status .gauge.well.lvl3 .gauge-val, #status .gauge.well.lvl3 .gauge-label { color: #ff5a3c; text-shadow: 0 0 12px rgba(255,90,60,0.7); }
+    </style>
+  </head>
+  <body>
+    <canvas id="app"></canvas>
+    <div id="lab-banner">Flight Test Lab</div>
+    <div id="hud"></div>
+    <div id="status"></div>
+    <div id="toast"></div>
+    <div id="fade-overlay"></div>
+    <script type="module" src="/src/test-main.ts"></script>
+  </body>
+</html>

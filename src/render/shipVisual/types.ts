@@ -7,7 +7,13 @@ export type ThrusterKey =
   | 'strafeLeft'
   | 'strafeRight'
   | 'strafeUp'
-  | 'strafeDown';
+  | 'strafeDown'
+  | 'pitchUp'
+  | 'pitchDown'
+  | 'yawLeft'
+  | 'yawRight'
+  | 'rollLeft'
+  | 'rollRight';
 
 export type ThrusterSet = Record<ThrusterKey, THREE.Mesh[]>;
 
@@ -25,5 +31,11 @@ export function emptyThrusterSet(): ThrusterSet {
     strafeRight: [],
     strafeUp: [],
     strafeDown: [],
+    pitchUp: [],
+    pitchDown: [],
+    yawLeft: [],
+    yawRight: [],
+    rollLeft: [],
+    rollRight: [],
   };
 }
