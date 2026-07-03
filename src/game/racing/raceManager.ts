@@ -1,7 +1,14 @@
 import type { RaceCourse } from './courses';
+import type { AsteroidGravityClass } from '../asteroids';
 
 export type RaceState = 'select' | 'countdown' | 'ready' | 'racing' | 'finished' | 'invalid';
 export type RaceStartMode = 'countdown' | 'ready';
+
+export const RACE_TIME_TUNING = {
+  DEAD_IRON_TIME_PULL_REF: 28,
+  DEAD_IRON_MIN_TIME_SCALE: 0.35,
+  WEAK_DEAD_IRON_TIME_MULT: 0.35,
+};
 
 export interface RaceFinish {
   readonly courseId: string;
@@ -30,7 +37,7 @@ export class RaceManager {
     this.finish = null;
   }
 
-  update(dt: number, launchRequested = false): { started: boolean } {
+  update(dt: number, launchRequested = false, timeScale = 1): { started: boolean } {
     if (this.state === 'countdown') {
       this.countdownSec -= dt;
       if (this.countdownSec <= 0) {
@@ -42,7 +49,7 @@ export class RaceManager {
       this.state = 'racing';
       return { started: true };
     } else if (this.state === 'racing') {
-      this.elapsedSec += dt;
+      this.elapsedSec += dt * clamp01(timeScale);
     }
     return { started: false };
   }
@@ -92,4 +99,18 @@ export function formatDelta(sec: number): string {
   if (!Number.isFinite(sec)) return '';
   const sign = sec <= 0 ? '-' : '+';
   return `${sign}${Math.abs(sec).toFixed(3)}`;
+}
+
+export function raceTimeScaleForGravity(gravityClass: AsteroidGravityClass | null, pull: number): number {
+  if (!gravityClass || gravityClass === 'ordinary' || !Number.isFinite(pull) || pull <= 0) return 1;
+
+  const pullT = clamp01(pull / Math.max(0.001, RACE_TIME_TUNING.DEAD_IRON_TIME_PULL_REF));
+  const shapedPull = pullT * pullT * (3 - 2 * pullT);
+  const classMult = gravityClass === 'weak' ? RACE_TIME_TUNING.WEAK_DEAD_IRON_TIME_MULT : 1;
+  const maxReward = 1 - clamp01(RACE_TIME_TUNING.DEAD_IRON_MIN_TIME_SCALE);
+  return clamp01(1 - shapedPull * clamp01(classMult) * maxReward);
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }

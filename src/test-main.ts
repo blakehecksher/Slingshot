@@ -363,6 +363,7 @@ function loop(nowMs: number): void {
     energy: energy.fraction,
     pull: gravitySample.strongestPull,
     clearance: gravitySample.closestClearance,
+    timeScale: 1,
     state: 'lab',
   });
 

@@ -7,6 +7,7 @@ import { FEEDBACK_TUNING } from '../game/feedback';
 import { GRAVITY_TUNING } from '../game/gravity';
 import { isTextInputTarget } from '../game/input';
 import { LIFECYCLE_TUNING } from '../game/lifecycle';
+import { RACE_TIME_TUNING } from '../game/racing/raceManager';
 import { SHIP_TUNING, type Ship } from '../game/ship';
 import type { DebugViz } from './debugViz';
 import {
@@ -23,6 +24,7 @@ const LIVE = {
   energy: 0,
   pull: 0,
   clearance: 0,
+  timeScale: 1,
   state: 'select',
 };
 
@@ -32,6 +34,7 @@ export interface LiveReadout {
   energy: number;
   pull: number;
   clearance: number;
+  timeScale: number;
   state: string;
 }
 
@@ -64,6 +67,9 @@ const PARAM_DOCS: Record<string, string> = {
   DANGER_RANGE: 'Clearance distance where the HUD/danger warning starts escalating. Raise this for bigger rocks.',
   SOFTENING_FACTOR: 'Smooths gravity very close to a rock so pull does not spike to infinity. Higher = gentler near the surface.',
   MIN_SOFTENING: 'Floor for the softening above, in metres. Higher = softer minimum even for tiny rocks.',
+  DEAD_IRON_TIME_PULL_REF: 'Dead Iron pull that earns the full clock-slow reward. Lower = time slows more easily.',
+  DEAD_IRON_MIN_TIME_SCALE: 'Fastest the scored clock can run in a strong Dead Iron well. Lower = bigger time reward.',
+  WEAK_DEAD_IRON_TIME_MULT: 'Fraction of the strong-well time reward weak Dead Iron can earn.',
   // Ship / sling feel
   SPEED_ASSIST_PULL_SUPPRESS_LO: 'At high speed, gravity pull is damped. This is the gentle floor of that damping — low values keep more throw when fast.',
   SPEED_ASSIST_PULL_SUPPRESS_HI: 'Upper limit of high-speed pull damping. LOWER this if you "zoom past" rocks without feeling thrown.',
@@ -169,6 +175,7 @@ export class TuningPanel {
     live.add(LIVE, 'speed').listen().disable().name('speed m/s');
     live.add(LIVE, 'pull').listen().disable().name('gravity pull');
     live.add(LIVE, 'clearance').listen().disable().name('clearance m');
+    live.add(LIVE, 'timeScale').listen().disable().name('clock scale');
     live.add(LIVE, 'energy').listen().disable().name('energy %');
     live.add(LIVE, 'state').listen().disable().name('race state');
     live.open();
@@ -181,6 +188,9 @@ export class TuningPanel {
     this.addTunable(f, 'GRAVITY_TUNING', GRAVITY_TUNING, 'CORE_BOOST_PEAK', 0, 16, 0.05);
     this.addTunable(f, 'GRAVITY_TUNING', GRAVITY_TUNING, 'CORE_BOOST_RANGE_FRAC', 0, 6, 0.05);
     this.addTunable(f, 'GRAVITY_TUNING', GRAVITY_TUNING, 'DANGER_RANGE', 50, 2500, 5);
+    this.addTunable(f, 'RACE_TIME_TUNING', RACE_TIME_TUNING, 'DEAD_IRON_TIME_PULL_REF', 1, 80, 0.5);
+    this.addTunable(f, 'RACE_TIME_TUNING', RACE_TIME_TUNING, 'DEAD_IRON_MIN_TIME_SCALE', 0.1, 1, 0.01);
+    this.addTunable(f, 'RACE_TIME_TUNING', RACE_TIME_TUNING, 'WEAK_DEAD_IRON_TIME_MULT', 0, 1, 0.01);
     // High-speed pull suppression — the likely culprit when you "zoom past" rocks.
     this.addTunable(f, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_PULL_SUPPRESS_LO', 0, 40, 0.1);
     this.addTunable(f, 'SHIP_TUNING', SHIP_TUNING, 'SPEED_ASSIST_PULL_SUPPRESS_HI', 0.5, 120, 0.1);
@@ -288,6 +298,7 @@ export class TuningPanel {
     LIVE.energy = Math.round(r.energy * 100);
     LIVE.pull = Math.round(r.pull * 100) / 100;
     LIVE.clearance = Math.round(r.clearance);
+    LIVE.timeScale = Math.round(r.timeScale * 100) / 100;
     LIVE.state = r.state;
     this.refreshResetButtons.forEach((refresh) => refresh());
   }

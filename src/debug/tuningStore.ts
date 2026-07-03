@@ -4,6 +4,7 @@ import { ENERGY_TUNING } from '../game/energy';
 import { FEEDBACK_TUNING } from '../game/feedback';
 import { GRAVITY_TUNING } from '../game/gravity';
 import { LIFECYCLE_TUNING } from '../game/lifecycle';
+import { RACE_TIME_TUNING } from '../game/racing/raceManager';
 import { SHIP_TUNING } from '../game/ship';
 
 // Single registry of every live-tunable group. Anything added here is
@@ -13,6 +14,7 @@ export const TUNING_GROUPS = {
   GRAVITY_TUNING,
   ENERGY_TUNING,
   LIFECYCLE_TUNING,
+  RACE_TIME_TUNING,
   ASTEROID_TUNING,
   AUDIO_TUNING,
   FEEDBACK_TUNING,

@@ -12,7 +12,7 @@ import { CheckpointSystem } from './game/racing/checkpoints';
 import { RACE_ASTEROID_DEFAULTS, RACE_COURSES, type RaceCourse } from './game/racing/courses';
 import { GhostRecorder, GhostReplay } from './game/racing/ghost';
 import { createLeaderboardProvider, type CourseRecord, type RaceLeaderboardEntry } from './game/racing/leaderboard';
-import { formatDelta, formatRaceTime, RaceManager } from './game/racing/raceManager';
+import { formatDelta, formatRaceTime, RaceManager, raceTimeScaleForGravity } from './game/racing/raceManager';
 import { CourseBoundary } from './game/racing/courseBoundary';
 import { initPhysics, PhysicsWorld } from './physics/world';
 import { GameAudio } from './audio/audio';
@@ -163,6 +163,7 @@ let lookYaw = 0;
 let lookPitch = 0;
 let trajectory: Trajectory = predictTrajectory(ship.position, ship.linearVelocity, asteroidField.asteroids);
 let gravitySample = sampleGravityAt(selectedCourse.startPosition, asteroidField.asteroids);
+let raceTimeScale = 1;
 let peakSpeed = 0;
 let accelMag = 0;
 let hasPrevVelocity = false;
@@ -376,6 +377,7 @@ function prepareCourse(course: RaceCourse): void {
   lookYaw = 0;
   lookPitch = 0;
   gravitySample = sampleGravityAt(course.startPosition, asteroidField.asteroids);
+  raceTimeScale = 1;
   syncGhostRuns(course.id);
 }
 
@@ -825,7 +827,7 @@ function tickPhysics(): void {
   if (cmd.toggleCameraMode) applyCameraToggle();
 
   const launchRequested = Math.max(Math.abs(cmd.thrust.x), Math.abs(cmd.thrust.y), Math.abs(cmd.thrust.z)) > 0.08;
-  const raceEvent = race.update(FIXED_DT, launchRequested);
+  const raceEvent = race.update(FIXED_DT, launchRequested, raceTimeScale);
   if (raceEvent.started) {
     ship.setFrozen(false);
     goOverlayTimer = 0.75;
@@ -836,6 +838,7 @@ function tickPhysics(): void {
   }
 
   if (race.state !== 'racing') {
+    raceTimeScale = 1;
     checkpoints.update(FIXED_DT, race.nextCheckpoint);
     lifecycle.update(FIXED_DT);
     return;
@@ -859,6 +862,7 @@ function tickPhysics(): void {
     return;
   }
   gravitySample = sampleGravityAt(shipPosVec, asteroidField.asteroids);
+  raceTimeScale = raceTimeScaleForGravity(gravitySample.strongestClass, gravitySample.strongestPull);
   checkTutorialProximityTips();
   if (gravitySample.strongestPull > 10 && gravitySample.closestClearance < 95) {
     audio.closeWellWarning(Math.min(1, gravitySample.strongestPull / 24));
@@ -1035,6 +1039,7 @@ function loop(nowMs: number): void {
     energy: energy.fraction,
     pull: gravitySample.strongestPull,
     clearance: gravitySample.closestClearance,
+    timeScale: raceTimeScale,
     state: race.state,
   });
 
@@ -1054,7 +1059,7 @@ function loop(nowMs: number): void {
       `Slingshot League - time trials\n` +
       `fps ${fps.toFixed(0)}  dt ${(FIXED_DT * 1000).toFixed(2)}ms  cam ${cameraMode}\n` +
       `course ${selectedCourse.name}  state ${race.state}  gate ${Math.min(race.nextCheckpoint + 1, selectedCourse.gates.length)} / ${selectedCourse.gates.length}\n` +
-      `time ${formatRaceTime(race.elapsedSec)}  target ${targetDist.toFixed(0)}m  speed ${ship.speed.toFixed(1)} m/s  peak ${peakSpeed.toFixed(1)}\n` +
+      `time ${formatRaceTime(race.elapsedSec)}  clock x${raceTimeScale.toFixed(2)}  target ${targetDist.toFixed(0)}m  speed ${ship.speed.toFixed(1)} m/s  peak ${peakSpeed.toFixed(1)}\n` +
       `pull ${gravitySample.strongestPull.toFixed(2)} m/s^2  clearance ${gravitySample.closestClearance.toFixed(0)}m  accel ${accelMag.toFixed(1)} m/s^2\n` +
       `${asteroidField.asteroids.length} asteroids (${asteroidCounts.ordinary}/${asteroidCounts.weak}/${asteroidCounts.strong})  rivals ${ghostStatusLabel()}  ${padHint}${lockHint}`;
   }
@@ -1129,6 +1134,7 @@ function updateStatus(): void {
     : 0;
   const wellClass = gravitySample.strongestClass?.toUpperCase() ?? 'NONE';
   const wellSub = Number.isFinite(clear) ? `${wellClass} · ${clear.toFixed(0)}M CLEAR` : 'OPEN SPACE';
+  const clockLabel = race.state === 'racing' && raceTimeScale < 0.995 ? ` · Clock x${raceTimeScale.toFixed(2)}` : '';
 
   const SPEED_REF = 360; // gauge fill reference, not a hard cap
   const speedPct = Math.max(0, Math.min(1, ship.speed / SPEED_REF)) * 100;
@@ -1157,7 +1163,7 @@ function updateStatus(): void {
     </div>
     <div class="rig-side right">
       <div class="gauge well lvl${wellLvl}">
-        <span class="gauge-label">Well Pull</span>
+        <span class="gauge-label">Well Pull${clockLabel}</span>
         <div class="gauge-row"><span class="gauge-val">${monoDigits(pull.toFixed(1))}<i>m/s²</i></span></div>
         <span class="sub">${wellSub}</span>
       </div>
